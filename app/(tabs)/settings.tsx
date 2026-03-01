@@ -1,0 +1,3414 @@
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  Alert,
+  TextInput,
+  ActivityIndicator,
+  Modal,
+  FlatList,
+} from 'react-native';
+import {
+  FileSpreadsheet,
+  RefreshCw,
+  Info,
+  ExternalLink,
+  Database,
+  Shield,
+  CheckCircle,
+  CheckCircle2,
+  XCircle,
+  Unlink,
+  X,
+  Lock,
+  Unlock,
+  Key,
+  Eye,
+  EyeOff,
+  ChevronLeft,
+  ChevronRight,
+  ArrowRight,
+  UserPlus,
+  Users,
+  UserCog,
+  ShieldCheck,
+  ShieldOff,
+  UserX,
+  Building2,
+  Copy,
+  Share2,
+  LogIn,
+  Trash2,
+  FileText,
+  History,
+  Edit3,
+  LockKeyhole,
+  UnlockKeyhole,
+} from 'lucide-react-native';
+import { ParsedPlayer } from '@/components/CSVImportModal';
+import { useRouter } from 'expo-router';
+
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRegistration } from '@/contexts/RegistrationContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useOrganization } from '@/contexts/OrganizationContext';
+import * as Clipboard from 'expo-clipboard';
+import Colors from '@/constants/colors';
+
+export default function SettingsScreen() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { 
+    resetData, 
+    stats, 
+    isConnected, 
+    sheetsConfig,
+    disconnectFromSheets,
+    refreshData,
+    isFetching,
+    hasError,
+    lastSyncTime,
+    connectionError,
+    importPlayers,
+    importMetadata,
+    clearAllImportedData,
+    isClearingData,
+    savedSheetInfo,
+    saveSheetInfo,
+    enableWriteBack,
+    disableWriteBack,
+    importedSheets,
+    addImportedSheet,
+    toggleSheetLock,
+    toggleSheetEditing,
+    deleteImportedSheet,
+  } = useRegistration();
+
+  const [showConnectModal, setShowConnectModal] = useState(false);
+  const [sheetUrl, setSheetUrl] = useState('');
+  const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
+  const [modalConnectionError, setModalConnectionError] = useState<string | null>(null);
+  const [sheetsStep, setSheetsStep] = useState<'url' | 'mapping' | 'preview' | 'importing' | 'complete'>('url');
+  const [sheetsHeaders, setSheetsHeaders] = useState<string[]>([]);
+  const [sheetsCsvData, setSheetsCsvData] = useState<string[][]>([]);
+  const [sheetsColumnMapping, setSheetsColumnMapping] = useState<Record<string, number>>({});
+  const [sheetsParsedPlayers, setSheetsParsedPlayers] = useState<ParsedPlayer[]>([]);
+  const [isLoadingSheet, setIsLoadingSheet] = useState(false);
+
+  const REQUIRED_FIELDS = ['firstName', 'lastName', 'club', 'ageGroup', 'division'];
+  const ALL_FIELDS: { key: keyof ParsedPlayer; label: string; required: boolean }[] = [
+    { key: 'firstName', label: 'First Name', required: true },
+    { key: 'lastName', label: 'Last Name', required: true },
+    { key: 'club', label: 'Club', required: true },
+    { key: 'ageGroup', label: 'Age Group', required: true },
+    { key: 'division', label: 'Division', required: true },
+    { key: 'dateOfBirth', label: 'Date of Birth', required: false },
+    { key: 'parentName', label: 'Parent Name', required: false },
+    { key: 'parentPhone', label: 'Phone', required: false },
+    { key: 'weight', label: 'Weight', required: false },
+  ];
+
+  const { 
+    isAdmin, 
+    isEditor,
+    canEdit,
+    role,
+    login, 
+    logout, 
+    changeAdminPin,
+    setEditorPin,
+    disableEditorAccess,
+    revokeAllEditorSessions,
+    editorPinEnabled,
+  } = useAuth();
+
+  const {
+    currentOrg,
+    organizations,
+    createOrg,
+    joinOrgByCode,
+    selectOrg,
+    isLoading: isOrgLoading,
+  } = useOrganization();
+
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showChangePinModal, setShowChangePinModal] = useState(false);
+  const [showEditorPinModal, setShowEditorPinModal] = useState(false);
+  const [showRevokeModal, setShowRevokeModal] = useState(false);
+  const [showJoinOrgModal, setShowJoinOrgModal] = useState(false);
+  const [showCreateOrgModal, setShowCreateOrgModal] = useState(false);
+  const [orgCodeInput, setOrgCodeInput] = useState('');
+  const [newOrgName, setNewOrgName] = useState('');
+  const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
+  const [showTermsOfService, setShowTermsOfService] = useState(false);
+  const [showImportedSheetsModal, setShowImportedSheetsModal] = useState(false);
+  const [orgError, setOrgError] = useState<string | null>(null);
+  const [pinInput, setPinInput] = useState('');
+  const [currentPinInput, setCurrentPinInput] = useState('');
+  const [newPinInput, setNewPinInput] = useState('');
+  const [editorPinInput, setEditorPinInput] = useState('');
+  const [adminVerifyPin, setAdminVerifyPin] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [showPin, setShowPin] = useState(false);
+
+  const resetSheetsModal = useCallback(() => {
+    setSheetsStep('url');
+    setSheetUrl('');
+    setSheetsHeaders([]);
+    setSheetsCsvData([]);
+    setSheetsColumnMapping({});
+    setSheetsParsedPlayers([]);
+    setModalConnectionError(null);
+    setIsLoadingSheet(false);
+  }, []);
+
+  const extractSpreadsheetId = (url: string): string | null => {
+    const patterns = [
+      /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/,
+      /^([a-zA-Z0-9-_]+)$/,
+    ];
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match) return match[1];
+    }
+    return null;
+  };
+
+  const parseCSV = (content: string): string[][] => {
+    const lines = content.split(/\r?\n/).filter(line => line.trim());
+    return lines.map(line => {
+      const values: string[] = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === ',' && !inQuotes) {
+          values.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      values.push(current.trim());
+      return values;
+    });
+  };
+
+  const handleFetchGoogleSheet = async () => {
+    const extractedId = extractSpreadsheetId(sheetUrl.trim());
+    if (!extractedId) {
+      setModalConnectionError('Please enter a valid Google Sheets URL.');
+      return;
+    }
+    
+    setSpreadsheetId(extractedId);
+    setIsLoadingSheet(true);
+    setModalConnectionError(null);
+    console.log('Fetching Google Sheet:', extractedId);
+    
+    try {
+      const csvUrl = `https://docs.google.com/spreadsheets/d/${extractedId}/export?format=csv`;
+      console.log('Fetching CSV from:', csvUrl);
+      
+      const response = await fetch(csvUrl);
+      
+      if (!response.ok) {
+        throw new Error('Could not access the spreadsheet. Make sure it\'s shared as "Anyone with the link can view".');
+      }
+      
+      const content = await response.text();
+      console.log('CSV content length:', content.length);
+      
+      if (!content || content.includes('<!DOCTYPE html>')) {
+        throw new Error('Could not access the spreadsheet. Make sure it\'s shared as "Anyone with the link can view".');
+      }
+      
+      const parsed = parseCSV(content);
+      console.log('Parsed rows:', parsed.length);
+      
+      if (parsed.length < 2) {
+        setModalConnectionError('The spreadsheet must have a header row and at least one data row.');
+        setIsLoadingSheet(false);
+        return;
+      }
+      
+      const headerRow = parsed[0];
+      const dataRows = parsed.slice(1);
+      
+      setSheetsHeaders(headerRow);
+      setSheetsCsvData(dataRows);
+
+      const autoMapping: Record<string, number> = {};
+      ALL_FIELDS.forEach(field => {
+        const matchIndex = headerRow.findIndex((h: string) => {
+          const normalized = h.toLowerCase().replace(/[_\s-]/g, '');
+          const fieldNormalized = field.key.toLowerCase();
+          const labelNormalized = field.label.toLowerCase().replace(/[_\s-]/g, '');
+          return normalized === fieldNormalized || 
+                 normalized === labelNormalized ||
+                 normalized.includes(fieldNormalized) ||
+                 fieldNormalized.includes(normalized);
+        });
+        if (matchIndex !== -1) {
+          autoMapping[field.key] = matchIndex;
+        }
+      });
+
+      console.log('Auto-mapped columns:', autoMapping);
+      setSheetsColumnMapping(autoMapping);
+      setSheetsStep('mapping');
+    } catch (error) {
+      console.error('Error fetching Google Sheet:', error);
+      const message = error instanceof Error ? error.message : 'Failed to fetch Google Sheet';
+      setModalConnectionError(message);
+    } finally {
+      setIsLoadingSheet(false);
+    }
+  };
+
+  const handleSheetsMappingChange = (fieldKey: string, columnIndex: number) => {
+    setSheetsColumnMapping(prev => ({
+      ...prev,
+      [fieldKey]: columnIndex,
+    }));
+  };
+
+  const validateSheetsMapping = (): boolean => {
+    const missingRequired = REQUIRED_FIELDS.filter(
+      field => sheetsColumnMapping[field] === undefined
+    );
+    if (missingRequired.length > 0) {
+      Alert.alert(
+        'Missing Required Fields',
+        `Please map the following required fields: ${missingRequired.join(', ')}`
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const handleSheetsProceedToPreview = () => {
+    if (!validateSheetsMapping()) return;
+
+    const players: ParsedPlayer[] = sheetsCsvData.map(row => ({
+      firstName: row[sheetsColumnMapping.firstName] || '',
+      lastName: row[sheetsColumnMapping.lastName] || '',
+      club: row[sheetsColumnMapping.club] || '',
+      ageGroup: row[sheetsColumnMapping.ageGroup] || '',
+      division: row[sheetsColumnMapping.division] || '',
+      teamName: sheetsColumnMapping.teamName !== undefined ? row[sheetsColumnMapping.teamName] || '' : '',
+      dateOfBirth: sheetsColumnMapping.dateOfBirth !== undefined ? row[sheetsColumnMapping.dateOfBirth] || '' : '',
+      parentName: sheetsColumnMapping.parentName !== undefined ? row[sheetsColumnMapping.parentName] || '' : '',
+      parentPhone: sheetsColumnMapping.parentPhone !== undefined ? row[sheetsColumnMapping.parentPhone] || '' : '',
+      weight: sheetsColumnMapping.weight !== undefined ? row[sheetsColumnMapping.weight] || '' : '',
+    })).filter(p => p.firstName && p.lastName);
+
+    console.log('Parsed players:', players.length);
+    setSheetsParsedPlayers(players);
+    setSheetsStep('preview');
+  };
+
+  const handleSheetsImport = async () => {
+    setSheetsStep('importing');
+    try {
+      console.log('=== STARTING GOOGLE SHEETS IMPORT ===' );
+      console.log('Number of parsed players:', sheetsParsedPlayers.length);
+      
+      if (sheetsParsedPlayers.length === 0) {
+        throw new Error('No players to import');
+      }
+      
+      console.log('First player data:', JSON.stringify(sheetsParsedPlayers[0]));
+      
+      const playersToImport = sheetsParsedPlayers.map(p => ({
+        firstName: p.firstName || '',
+        lastName: p.lastName || '',
+        club: p.club || '',
+        ageGroup: p.ageGroup || '',
+        division: p.division || '',
+        teamName: p.teamName || '',
+        dateOfBirth: p.dateOfBirth || '',
+        parentName: p.parentName || '',
+        parentPhone: p.parentPhone || '',
+        weight: p.weight || '',
+        isAgeVerified: false,
+        photoUri: null,
+        checkedIn: false,
+        checkedInAt: null,
+      }));
+      
+      console.log('Players prepared for import:', playersToImport.length);
+      console.log('First prepared player:', JSON.stringify(playersToImport[0]));
+      
+      await importPlayers(playersToImport);
+      
+      console.log('=== IMPORT COMPLETE ===' );
+      console.log('Successfully imported', playersToImport.length, 'players');
+
+      if (spreadsheetId) {
+        try {
+          console.log('Attempting to import metadata from spreadsheet:', spreadsheetId);
+          await importMetadata(spreadsheetId);
+          console.log('Metadata import successful');
+        } catch (metaError) {
+          console.warn('Failed to import metadata (clubs/teams):', metaError);
+        }
+        
+        // Save the sheet URL for future re-imports
+        await saveSheetInfo(sheetUrl, spreadsheetId, 'Google Sheet');
+        console.log('Sheet URL saved for future use');
+        
+        // Add to imported sheets history with access code
+        const importedSheet = await addImportedSheet(
+          spreadsheetId,
+          sheetUrl,
+          'Google Sheet',
+          sheetsParsedPlayers.length,
+          'admin'
+        );
+        console.log('Sheet added to history with access code:', importedSheet.accessCode);
+      }
+      
+      refreshData();
+      
+      setSheetsStep('complete');
+      Alert.alert(
+        'Import Complete',
+        `Successfully imported ${sheetsParsedPlayers.length} players from Google Sheets.\n\nThis sheet has been saved - you can re-import from it anytime in Settings.`
+      );
+    } catch (error) {
+      console.error('=== IMPORT ERROR ===');
+      console.error('Error details:', error);
+      Alert.alert('Import Failed', error instanceof Error ? error.message : 'Some players could not be imported. Please try again.');
+      setSheetsStep('preview');
+    }
+  };
+
+  const handleCloseSheetsModal = () => {
+    setShowConnectModal(false);
+    resetSheetsModal();
+  };
+
+  const handleResetData = () => {
+    Alert.alert(
+      'Reset All Data',
+      'This will reset all player data to the original mock data. All check-ins and added players will be lost. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            resetData();
+            Alert.alert('Data Reset', 'All player data has been reset.');
+          },
+        },
+      ]
+    );
+  };
+
+  const handleClearAllData = () => {
+    Alert.alert(
+      'Clear All Imported Data',
+      'This will remove ALL imported players, spreadsheet connection, and metadata. You can then import a different spreadsheet. This action cannot be undone. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await clearAllImportedData();
+              Alert.alert('Data Cleared', 'All imported data has been removed. You can now import a new spreadsheet.');
+            } catch (error) {
+              console.error('Error clearing data:', error);
+              Alert.alert('Error', 'Failed to clear data. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleDisconnect = () => {
+    Alert.alert(
+      'Disconnect from Google Sheets',
+      'This will switch back to local storage mode. Your data will still be saved in the spreadsheet.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            await disconnectFromSheets();
+            Alert.alert('Disconnected', 'Now using local storage mode.');
+          },
+        },
+      ]
+    );
+  };
+
+  const handleRefreshData = () => {
+    refreshData();
+    Alert.alert('Refreshing', 'Fetching latest data from Google Sheets...');
+  };
+
+  const handleLogin = async () => {
+    setPinError(null);
+    const result = await login(pinInput);
+    if (result.success) {
+      setShowLoginModal(false);
+      setPinInput('');
+      const roleLabel = result.role === 'admin' ? 'Admin' : 'Editor';
+      Alert.alert('Success', `You now have ${roleLabel} access.`);
+    } else {
+      setPinError('Invalid PIN. Please try again.');
+    }
+  };
+
+  const handleLogout = () => {
+    const modeLabel = isAdmin ? 'admin' : 'editor';
+    Alert.alert(
+      'Switch to View-Only Mode',
+      `You will lose ${modeLabel} access until you enter the PIN again.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Switch',
+          onPress: async () => {
+            await logout();
+            Alert.alert('View-Only Mode', 'You are now in view-only mode.');
+          },
+        },
+      ]
+    );
+  };
+
+  const handleChangeAdminPin = async () => {
+    setPinError(null);
+    if (newPinInput.length < 4) {
+      setPinError('New PIN must be at least 4 digits.');
+      return;
+    }
+    const success = await changeAdminPin(currentPinInput, newPinInput);
+    if (success) {
+      setShowChangePinModal(false);
+      setCurrentPinInput('');
+      setNewPinInput('');
+      Alert.alert(
+        'Admin PIN Changed',
+        'Your admin PIN has been changed. All other admin sessions have been logged out.'
+      );
+    } else {
+      setPinError('Current PIN is incorrect.');
+    }
+  };
+
+  const handleSetEditorPin = async () => {
+    setPinError(null);
+    if (editorPinInput.length < 4) {
+      setPinError('Editor PIN must be at least 4 digits.');
+      return;
+    }
+    const success = await setEditorPin(adminVerifyPin, editorPinInput);
+    if (success) {
+      setShowEditorPinModal(false);
+      setAdminVerifyPin('');
+      setEditorPinInput('');
+      Alert.alert(
+        'Editor PIN Set',
+        'Editor access PIN has been set. Share this PIN with people you want to grant edit access. Previous editor sessions have been logged out.'
+      );
+    } else {
+      setPinError('Admin PIN verification failed.');
+    }
+  };
+
+  const handleDisableEditorAccess = () => {
+    Alert.alert(
+      'Disable Editor Access',
+      'This will revoke all editor access. People with the editor PIN will no longer be able to log in. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disable',
+          style: 'destructive',
+          onPress: async () => {
+            setShowRevokeModal(true);
+          },
+        },
+      ]
+    );
+  };
+
+  const handleConfirmDisableEditor = async () => {
+    setPinError(null);
+    const success = await disableEditorAccess(adminVerifyPin);
+    if (success) {
+      setShowRevokeModal(false);
+      setAdminVerifyPin('');
+      Alert.alert('Editor Access Disabled', 'All editor sessions have been revoked.');
+    } else {
+      setPinError('Admin PIN verification failed.');
+    }
+  };
+
+  const handleCopyOrgCode = async () => {
+    if (currentOrg?.code) {
+      await Clipboard.setStringAsync(currentOrg.code);
+      Alert.alert('Copied!', 'Organization code copied to clipboard. Share this with your volunteers.');
+    }
+  };
+
+  const handleShareOrgCode = async () => {
+    if (currentOrg) {
+      const message = `Join ${currentOrg.name} on the Youth Sports Registration app!\n\nOrganization Code: ${currentOrg.code}\n\nEnter this code in the app to join our organization.`;
+      Alert.alert('Share Code', message);
+    }
+  };
+
+  const handleJoinOrg = async () => {
+    setOrgError(null);
+    if (!orgCodeInput.trim()) {
+      setOrgError('Please enter an organization code.');
+      return;
+    }
+    
+    const userId = `user-${Date.now()}`;
+    const result = await joinOrgByCode(orgCodeInput.trim().toUpperCase(), userId, 'Volunteer', '');
+    
+    if (result) {
+      setShowJoinOrgModal(false);
+      setOrgCodeInput('');
+      Alert.alert('Success!', `You have joined ${result.name}. You now have view-only access. Contact the admin for edit permissions.`);
+    } else {
+      setOrgError('Invalid organization code. Please check and try again.');
+    }
+  };
+
+  const handleCreateOrg = async () => {
+    setOrgError(null);
+    if (!newOrgName.trim()) {
+      setOrgError('Please enter an organization name.');
+      return;
+    }
+    
+    const userId = `owner-${Date.now()}`;
+    const org = await createOrg(newOrgName.trim(), userId);
+    
+    setShowCreateOrgModal(false);
+    setNewOrgName('');
+    Alert.alert(
+      'Organization Created!',
+      `Your organization code is: ${org.code}\n\nShare this code with volunteers so they can join.`,
+      [{ text: 'Copy Code', onPress: () => Clipboard.setStringAsync(org.code) }, { text: 'OK' }]
+    );
+  };
+
+  const handleRevokeEditorSessions = () => {
+    Alert.alert(
+      'Revoke All Editor Sessions',
+      'This will log out all editors. They will need to re-enter the editor PIN to regain access. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Revoke',
+          style: 'destructive',
+          onPress: async () => {
+            const success = await revokeAllEditorSessions(adminVerifyPin || currentPinInput);
+            if (success) {
+              Alert.alert('Sessions Revoked', 'All editor sessions have been logged out.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const getRoleLabel = () => {
+    switch (role) {
+      case 'admin': return 'Admin';
+      case 'editor': return 'Editor';
+      default: return 'Viewer';
+    }
+  };
+
+  const getRoleDescription = () => {
+    switch (role) {
+      case 'admin':
+        return 'You have full access to check in players, add new players, import data, manage settings, and control who has edit access.';
+      case 'editor':
+        return 'You can check in players, add new players, and import data. You cannot change access settings.';
+      default:
+        return 'You can view player information and roster. Enter a PIN to unlock edit access.';
+    }
+  };
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={[styles.content, { paddingTop: insets.top + 20 }]}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Settings</Text>
+        <Text style={styles.subtitle}>Configure your registration app</Text>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Organization</Text>
+        
+        {currentOrg ? (
+          <View style={styles.orgCard}>
+            <View style={styles.orgHeader}>
+              <Building2 size={24} color={Colors.primary} />
+              <View style={styles.orgInfo}>
+                <Text style={styles.orgName}>{currentOrg.name}</Text>
+                <Text style={styles.orgRole}>
+                  {isAdmin ? 'Admin' : isEditor ? 'Editor' : 'Volunteer'}
+                </Text>
+              </View>
+            </View>
+            
+            {isAdmin && (
+              <View style={styles.orgCodeSection}>
+                <Text style={styles.orgCodeLabel}>Invite Code</Text>
+                <View style={styles.orgCodeRow}>
+                  <Text style={styles.orgCode}>{currentOrg.code}</Text>
+                  <TouchableOpacity
+                    style={styles.copyButton}
+                    onPress={handleCopyOrgCode}
+                    activeOpacity={0.7}
+                  >
+                    <Copy size={18} color={Colors.primary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.shareButton}
+                    onPress={handleShareOrgCode}
+                    activeOpacity={0.7}
+                  >
+                    <Share2 size={18} color={Colors.primary} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.orgCodeHint}>
+                  Share this code with volunteers to let them join your organization
+                </Text>
+              </View>
+            )}
+            
+            {organizations.length > 1 && (
+              <TouchableOpacity
+                style={styles.switchOrgButton}
+                onPress={() => {
+                  Alert.alert(
+                    'Switch Organization',
+                    'Select an organization',
+                    organizations.map(org => ({
+                      text: org.name,
+                      onPress: () => selectOrg(org.id),
+                    }))
+                  );
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.switchOrgText}>Switch Organization</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : (
+          <View style={styles.noOrgCard}>
+            <Building2 size={32} color={Colors.textMuted} />
+            <Text style={styles.noOrgTitle}>No Organization</Text>
+            <Text style={styles.noOrgText}>
+              Join an existing organization or create a new one
+            </Text>
+            <View style={styles.orgActions}>
+              <TouchableOpacity
+                style={styles.joinOrgButton}
+                onPress={() => {
+                  setOrgCodeInput('');
+                  setOrgError(null);
+                  setShowJoinOrgModal(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <LogIn size={18} color={Colors.white} />
+                <Text style={styles.joinOrgButtonText}>Join Organization</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.createOrgButton}
+                onPress={() => {
+                  setNewOrgName('');
+                  setOrgError(null);
+                  setShowCreateOrgModal(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Building2 size={18} color={Colors.primary} />
+                <Text style={styles.createOrgButtonText}>Create New</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Access Control</Text>
+
+        {canEdit ? (
+          <View style={[styles.adminCard, isEditor && styles.editorCard]}>
+            <View style={styles.adminHeader}>
+              {isAdmin ? (
+                <ShieldCheck size={24} color={Colors.primary} />
+              ) : (
+                <UserCog size={24} color={Colors.info} />
+              )}
+              <Text style={[styles.adminTitle, isEditor && styles.editorTitle]}>
+                {getRoleLabel()} Access Active
+              </Text>
+            </View>
+            <Text style={styles.adminDetail}>{getRoleDescription()}</Text>
+            
+            <View style={styles.adminActions}>
+              {isAdmin && (
+                <TouchableOpacity
+                  style={styles.changePinButton}
+                  onPress={() => setShowChangePinModal(true)}
+                  activeOpacity={0.7}
+                >
+                  <Key size={18} color={Colors.primary} />
+                  <Text style={styles.changePinButtonText}>Change Admin PIN</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={styles.logoutButton}
+                onPress={handleLogout}
+                activeOpacity={0.7}
+              >
+                <Lock size={18} color={Colors.warning} />
+                <Text style={styles.logoutButtonText}>View-Only Mode</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.viewerCard}>
+            <View style={styles.viewerHeader}>
+              <Lock size={24} color={Colors.textSecondary} />
+              <Text style={styles.viewerTitle}>View-Only Mode</Text>
+            </View>
+            <Text style={styles.viewerDetail}>{getRoleDescription()}</Text>
+            <TouchableOpacity
+              style={styles.unlockButton}
+              onPress={() => setShowLoginModal(true)}
+              activeOpacity={0.7}
+            >
+              <Unlock size={18} color={Colors.white} />
+              <Text style={styles.unlockButtonText}>Unlock Access</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      {isAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Editor Access Management</Text>
+          
+          <View style={styles.editorManagementCard}>
+            <View style={styles.editorStatusRow}>
+              <Users size={20} color={editorPinEnabled ? Colors.success : Colors.textMuted} />
+              <View style={styles.editorStatusContent}>
+                <Text style={styles.editorStatusTitle}>
+                  Editor Access: {editorPinEnabled ? 'Enabled' : 'Disabled'}
+                </Text>
+                <Text style={styles.editorStatusSubtitle}>
+                  {editorPinEnabled 
+                    ? 'Others can log in with the editor PIN to check in players and add new players.'
+                    : 'Only you (admin) can make changes. Set an editor PIN to allow others to help.'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.editorActions}>
+              <TouchableOpacity
+                style={styles.editorActionButton}
+                onPress={() => {
+                  setEditorPinInput('');
+                  setAdminVerifyPin('');
+                  setPinError(null);
+                  setShowEditorPinModal(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Key size={18} color={Colors.primary} />
+                <Text style={styles.editorActionText}>
+                  {editorPinEnabled ? 'Change Editor PIN' : 'Set Editor PIN'}
+                </Text>
+              </TouchableOpacity>
+
+              {editorPinEnabled && (
+                <TouchableOpacity
+                  style={[styles.editorActionButton, styles.editorActionDanger]}
+                  onPress={handleDisableEditorAccess}
+                  activeOpacity={0.7}
+                >
+                  <ShieldOff size={18} color={Colors.error} />
+                  <Text style={[styles.editorActionText, styles.editorActionTextDanger]}>
+                    Disable Editor Access
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Info size={20} color={Colors.textSecondary} />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoTitle}>How Editor Access Works</Text>
+                <Text style={styles.infoText}>
+                  • Set an Editor PIN to allow helpers to check in players{'\n'}
+                  • Editors can add players and check them in{'\n'}
+                  • Editors cannot change PINs or access settings{'\n'}
+                  • Change the Editor PIN anytime to revoke all editor sessions
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {canEdit && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Player Management</Text>
+
+          <TouchableOpacity
+            style={styles.card}
+            onPress={() => router.push('/add-player')}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconBg, { backgroundColor: Colors.primaryLight }]}>
+              <UserPlus size={24} color={Colors.primary} />
+            </View>
+            <View style={styles.cardContent}>
+              <Text style={styles.cardTitle}>Add Player</Text>
+              <Text style={styles.cardDescription}>
+                Manually add a new player to the roster
+              </Text>
+            </View>
+            <ChevronRight size={20} color={Colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {canEdit && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Data Import</Text>
+
+          {savedSheetInfo && !isConnected && (
+            <View style={styles.savedSheetCard}>
+              <View style={styles.savedSheetHeader}>
+                <FileSpreadsheet size={20} color="#34A853" />
+                <View style={styles.savedSheetInfo}>
+                  <Text style={styles.savedSheetTitle}>Saved Google Sheet</Text>
+                  <Text style={styles.savedSheetDetail}>
+                    Last imported: {new Date(savedSheetInfo.lastImportedAt).toLocaleDateString()}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.savedSheetId} numberOfLines={1}>
+                ID: {savedSheetInfo.spreadsheetId.slice(0, 25)}...
+              </Text>
+              <View style={styles.savedSheetActions}>
+                <TouchableOpacity
+                  style={styles.reImportButton}
+                  onPress={() => {
+                    setSheetUrl(`https://docs.google.com/spreadsheets/d/${savedSheetInfo.spreadsheetId}`);
+                    setShowConnectModal(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <RefreshCw size={16} color={Colors.white} />
+                  <Text style={styles.reImportButtonText}>Re-import Data</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.enableWriteBackButton}
+                  onPress={async () => {
+                    try {
+                      await enableWriteBack(savedSheetInfo.spreadsheetId, 'Players');
+                      Alert.alert(
+                        'Write-Back Enabled',
+                        'Changes you make (check-ins, weights, photos) will now sync to your Google Sheet.\n\nNote: The sheet must be shared with the service account for this to work.'
+                      );
+                    } catch (error) {
+                      Alert.alert('Error', 'Failed to enable write-back. Please try again.');
+                    }
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Database size={16} color="#34A853" />
+                  <Text style={styles.enableWriteBackText}>Enable Sync</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {isConnected ? (
+            <View style={[styles.connectedCard, hasError && styles.connectedCardError]}>
+              <View style={styles.connectedHeader}>
+                {hasError ? (
+                  <XCircle size={24} color={Colors.warning} />
+                ) : isFetching ? (
+                  <ActivityIndicator size={24} color="#4CAF50" />
+                ) : (
+                  <CheckCircle size={24} color="#4CAF50" />
+                )}
+                <Text style={[styles.connectedTitle, hasError && styles.connectedTitleError]}>
+                  {hasError ? 'Connection Issue' : isFetching ? 'Syncing...' : 'Connected to Google Sheets'}
+                </Text>
+              </View>
+              {hasError && connectionError && (
+                <View style={styles.errorBanner}>
+                  <Text style={styles.errorBannerText}>{connectionError}</Text>
+                </View>
+              )}
+              <Text style={styles.connectedDetail}>
+                Spreadsheet ID: {sheetsConfig?.spreadsheetId?.slice(0, 20)}...
+              </Text>
+              <Text style={styles.connectedDetail}>
+                Sheet: {sheetsConfig?.sheetName || 'Players'}
+              </Text>
+              {lastSyncTime > 0 && (
+                <Text style={styles.syncTime}>
+                  Last synced: {new Date(lastSyncTime).toLocaleTimeString()}
+                </Text>
+              )}
+              <View style={styles.connectedActions}>
+                <TouchableOpacity
+                  style={[styles.refreshButton, isFetching && styles.refreshButtonDisabled]}
+                  onPress={handleRefreshData}
+                  activeOpacity={0.7}
+                  disabled={isFetching}
+                >
+                  {isFetching ? (
+                    <ActivityIndicator size={18} color={Colors.primary} />
+                  ) : (
+                    <RefreshCw size={18} color={Colors.primary} />
+                  )}
+                  <Text style={styles.refreshButtonText}>{isFetching ? 'Syncing...' : 'Refresh Data'}</Text>
+                </TouchableOpacity>
+                {isAdmin && (
+                  <TouchableOpacity
+                    style={styles.disconnectButton}
+                    onPress={handleDisconnect}
+                    activeOpacity={0.7}
+                  >
+                    <Unlink size={18} color={Colors.error} />
+                    <Text style={styles.disconnectButtonText}>Disconnect</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={styles.card}
+              onPress={() => setShowConnectModal(true)}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.iconBg, { backgroundColor: '#E8F5E9' }]}>
+                <FileSpreadsheet size={24} color="#4CAF50" />
+              </View>
+              <View style={styles.cardContent}>
+                <Text style={styles.cardTitle}>Import from Google Sheets</Text>
+                <Text style={styles.cardDescription}>
+                  Import players from a shared spreadsheet
+                </Text>
+              </View>
+              <ExternalLink size={20} color={Colors.textMuted} />
+            </TouchableOpacity>
+          )}
+
+          <View style={styles.statusCard}>
+            <View style={styles.statusRow}>
+              <Database size={18} color={Colors.textSecondary} />
+              <Text style={styles.statusLabel}>Current Data</Text>
+            </View>
+            <Text style={styles.statusValue}>
+              {stats.total} players loaded
+            </Text>
+            <Text style={styles.statusNote}>
+              {stats.checkedIn} checked in this week
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {isAdmin && importedSheets.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Imported Sheets History</Text>
+          
+          <TouchableOpacity
+            style={styles.card}
+            onPress={() => setShowImportedSheetsModal(true)}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.iconBg, { backgroundColor: '#E8F5E9' }]}>
+              <History size={24} color="#34A853" />
+            </View>
+            <View style={styles.cardContent}>
+              <Text style={styles.cardTitle}>Manage Imported Sheets</Text>
+              <Text style={styles.cardDescription}>
+                {importedSheets.length} sheet{importedSheets.length !== 1 ? 's' : ''} saved • View access codes & permissions
+              </Text>
+            </View>
+            <ChevronRight size={20} color={Colors.textMuted} />
+          </TouchableOpacity>
+
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Info size={20} color={Colors.textSecondary} />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoTitle}>Sheet Access Codes</Text>
+                <Text style={styles.infoText}>
+                  Each imported sheet has a unique access code. Share this code with users who need to re-import or access the same data. By default, users join with view-only permissions.
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {isAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Data Management</Text>
+
+          {stats.total > 0 && (
+            <TouchableOpacity
+              style={styles.card}
+              onPress={handleClearAllData}
+              activeOpacity={0.7}
+              disabled={isClearingData}
+            >
+              <View style={[styles.iconBg, { backgroundColor: Colors.errorLight }]}>
+                {isClearingData ? (
+                  <ActivityIndicator size={24} color={Colors.error} />
+                ) : (
+                  <Trash2 size={24} color={Colors.error} />
+                )}
+              </View>
+              <View style={styles.cardContent}>
+                <Text style={[styles.cardTitle, { color: Colors.error }]}>
+                  {isClearingData ? 'Clearing...' : 'Clear All Imported Data'}
+                </Text>
+                <Text style={styles.cardDescription}>
+                  Remove all players and start fresh with a new spreadsheet
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {!isConnected && (
+            <TouchableOpacity
+              style={styles.card}
+              onPress={handleResetData}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.iconBg, { backgroundColor: Colors.warningLight }]}>
+                <RefreshCw size={24} color={Colors.warning} />
+              </View>
+              <View style={styles.cardContent}>
+                <Text style={styles.cardTitle}>Reset Demo Data</Text>
+                <Text style={styles.cardDescription}>
+                  Restore original sample players
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>About</Text>
+
+        <View style={styles.infoCard}>
+          <View style={styles.infoRow}>
+            <Shield size={20} color={Colors.primary} />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoTitle}>Youth Sports Registration</Text>
+              <Text style={styles.infoText}>
+                Version 1.0.0{'\n'}
+                Built for efficient player check-in and roster management at youth sports events.
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.infoCard}>
+          <View style={styles.infoRow}>
+            <Info size={20} color={Colors.textSecondary} />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoTitle}>How to Use</Text>
+              <Text style={styles.infoText}>
+                • View rosters and filter by club, age, or division{'\n'}
+                • Admin/Editor: Enter PIN to unlock check-in and editing{'\n'}
+                • Admin: Manage editor access and import players
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => setShowPrivacyPolicy(true)}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.iconBg, { backgroundColor: Colors.surfaceAlt }]}>
+            <FileText size={24} color={Colors.textSecondary} />
+          </View>
+          <View style={styles.cardContent}>
+            <Text style={styles.cardTitle}>Privacy Policy</Text>
+            <Text style={styles.cardDescription}>
+              View our privacy policy and data practices
+            </Text>
+          </View>
+          <ChevronRight size={20} color={Colors.textMuted} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => setShowTermsOfService(true)}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.iconBg, { backgroundColor: Colors.surfaceAlt }]}>
+            <FileText size={24} color={Colors.textSecondary} />
+          </View>
+          <View style={styles.cardContent}>
+            <Text style={styles.cardTitle}>Terms of Service</Text>
+            <Text style={styles.cardDescription}>
+              View the terms and conditions of use
+            </Text>
+          </View>
+          <ChevronRight size={20} color={Colors.textMuted} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Support</Text>
+
+        <View style={styles.infoCard}>
+          <View style={styles.infoRow}>
+            <Info size={20} color={Colors.primary} />
+            <View style={styles.infoContent}>
+              <Text style={styles.infoTitle}>Contact Us</Text>
+              <Text style={styles.infoText}>
+                For questions, feedback, or support:{"\n"}
+                Email: utahsportsrecording@gmail.com{"\n\n"}
+                We typically respond within 24-48 hours.
+              </Text>
+            </View>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.footer}>
+        <Text style={styles.footerText}>
+          Contact your administrator for access
+        </Text>
+      </View>
+
+      <Modal
+        visible={showConnectModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={handleCloseSheetsModal}
+      >
+        <View style={styles.sheetsModalContainer}>
+          <View style={styles.sheetsModalHeader}>
+            <Text style={styles.sheetsModalHeaderTitle}>Import from Google Sheets</Text>
+            <TouchableOpacity style={styles.sheetsCloseButton} onPress={handleCloseSheetsModal}>
+              <X size={24} color={Colors.text} />
+            </TouchableOpacity>
+          </View>
+
+          {sheetsStep === 'url' && (
+            <View style={styles.sheetsStepContainer}>
+              <View style={[styles.sheetsUploadIcon, { backgroundColor: '#E8F5E9' }]}>
+                <FileSpreadsheet size={48} color="#34A853" />
+              </View>
+              <Text style={styles.sheetsStepTitle}>Import from Google Sheets</Text>
+              <Text style={styles.sheetsStepDescription}>
+                Paste a link to your publicly shared Google Sheet.
+              </Text>
+
+              <View style={styles.sheetsInputContainer}>
+                <Text style={styles.sheetsInputLabel}>Spreadsheet URL</Text>
+                <TextInput
+                  style={styles.sheetsUrlInput}
+                  placeholder="https://docs.google.com/spreadsheets/d/..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={sheetUrl}
+                  onChangeText={setSheetUrl}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
+              </View>
+
+              <View style={styles.sheetsFormatInfo}>
+                <Text style={styles.sheetsFormatTitle}>How to share your sheet:</Text>
+                <Text style={styles.sheetsFormatText}>
+                  1. Open your Google Sheet{"\n"}
+                  2. Click Share → select &quot;Anyone with the link&quot;{"\n"}
+                  3. Set access to &quot;Viewer&quot;{"\n"}
+                  4. Copy the link and paste it above
+                </Text>
+              </View>
+
+              {modalConnectionError && (
+                <View style={styles.errorContainer}>
+                  <XCircle size={18} color={Colors.error} />
+                  <Text style={styles.errorText}>{modalConnectionError}</Text>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={[styles.sheetsPrimaryButton, (!sheetUrl.trim() || isLoadingSheet) && styles.sheetsPrimaryButtonDisabled]}
+                onPress={handleFetchGoogleSheet}
+                disabled={!sheetUrl.trim() || isLoadingSheet}
+              >
+                {isLoadingSheet ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <>
+                    <FileSpreadsheet size={20} color={Colors.white} />
+                    <Text style={styles.sheetsPrimaryButtonText}>Fetch Sheet Data</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {sheetsStep === 'mapping' && (
+            <View style={styles.sheetsStepContainer}>
+              <Text style={styles.sheetsStepTitle}>Map Columns</Text>
+              <Text style={styles.sheetsStepDescription}>
+                Match your spreadsheet columns to player fields.
+              </Text>
+
+              <ScrollView style={styles.sheetsMappingList} showsVerticalScrollIndicator={false}>
+                {ALL_FIELDS.map(field => (
+                  <View key={field.key} style={styles.sheetsMappingRow}>
+                    <View style={styles.sheetsMappingField}>
+                      <Text style={styles.sheetsMappingFieldLabel}>
+                        {field.label}
+                        {field.required && <Text style={styles.sheetsRequiredStar}> *</Text>}
+                      </Text>
+                    </View>
+                    <ArrowRight size={16} color={Colors.textMuted} />
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.sheetsMappingOptions}>
+                      <TouchableOpacity
+                        style={[
+                          styles.sheetsMappingOption,
+                          sheetsColumnMapping[field.key] === undefined && styles.sheetsMappingOptionSelected,
+                        ]}
+                        onPress={() => {
+                          const newMapping = { ...sheetsColumnMapping };
+                          delete newMapping[field.key];
+                          setSheetsColumnMapping(newMapping);
+                        }}
+                      >
+                        <Text style={[
+                          styles.sheetsMappingOptionText,
+                          sheetsColumnMapping[field.key] === undefined && styles.sheetsMappingOptionTextSelected,
+                        ]}>
+                          Skip
+                        </Text>
+                      </TouchableOpacity>
+                      {sheetsHeaders.map((header, index) => (
+                        <TouchableOpacity
+                          key={index}
+                          style={[
+                            styles.sheetsMappingOption,
+                            sheetsColumnMapping[field.key] === index && styles.sheetsMappingOptionSelected,
+                          ]}
+                          onPress={() => handleSheetsMappingChange(field.key, index)}
+                        >
+                          <Text
+                            style={[
+                              styles.sheetsMappingOptionText,
+                              sheetsColumnMapping[field.key] === index && styles.sheetsMappingOptionTextSelected,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {header || `Col ${index + 1}`}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                ))}
+              </ScrollView>
+
+              <View style={styles.sheetsButtonRow}>
+                <TouchableOpacity
+                  style={styles.sheetsSecondaryButton}
+                  onPress={() => setSheetsStep('url')}
+                >
+                  <Text style={styles.sheetsSecondaryButtonText}>Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sheetsPrimaryButton}
+                  onPress={handleSheetsProceedToPreview}
+                >
+                  <Text style={styles.sheetsPrimaryButtonText}>Preview</Text>
+                  <ChevronRight size={18} color={Colors.white} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {sheetsStep === 'preview' && (
+            <View style={styles.sheetsStepContainer}>
+              <Text style={styles.sheetsStepTitle}>Preview Import</Text>
+              <Text style={styles.sheetsStepDescription}>
+                {sheetsParsedPlayers.length} players ready to import
+              </Text>
+
+              <FlatList
+                data={sheetsParsedPlayers.slice(0, 50)}
+                keyExtractor={(_, index) => index.toString()}
+                style={styles.sheetsPreviewList}
+                renderItem={({ item, index }) => (
+                  <View style={styles.sheetsPreviewRow}>
+                    <Text style={styles.sheetsPreviewIndex}>{index + 1}</Text>
+                    <View style={styles.sheetsPreviewInfo}>
+                      <Text style={styles.sheetsPreviewName}>
+                        {item.firstName} {item.lastName}
+                      </Text>
+                      <Text style={styles.sheetsPreviewMeta}>
+                        {item.club} • {item.ageGroup} • {item.division}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                ListFooterComponent={
+                  sheetsParsedPlayers.length > 50 ? (
+                    <Text style={styles.sheetsPreviewMore}>
+                      +{sheetsParsedPlayers.length - 50} more players...
+                    </Text>
+                  ) : null
+                }
+              />
+
+              <View style={styles.sheetsButtonRow}>
+                <TouchableOpacity
+                  style={styles.sheetsSecondaryButton}
+                  onPress={() => setSheetsStep('mapping')}
+                >
+                  <Text style={styles.sheetsSecondaryButtonText}>Back</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.sheetsPrimaryButton}
+                  onPress={handleSheetsImport}
+                >
+                  <Text style={styles.sheetsPrimaryButtonText}>Import All</Text>
+                  <CheckCircle2 size={18} color={Colors.white} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {sheetsStep === 'importing' && (
+            <View style={styles.sheetsStepContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={styles.sheetsStepTitle}>Importing Players...</Text>
+              <Text style={styles.sheetsStepDescription}>
+                Please wait while we add {sheetsParsedPlayers.length} players.
+              </Text>
+            </View>
+          )}
+
+          {sheetsStep === 'complete' && (
+            <View style={styles.sheetsStepContainer}>
+              <View style={styles.sheetsSuccessIcon}>
+                <CheckCircle2 size={48} color={Colors.success} />
+              </View>
+              <Text style={styles.sheetsStepTitle}>Import Complete!</Text>
+              <Text style={styles.sheetsStepDescription}>
+                Successfully imported {sheetsParsedPlayers.length} players.
+              </Text>
+              <TouchableOpacity style={styles.sheetsPrimaryButton} onPress={handleCloseSheetsModal}>
+                <Text style={styles.sheetsPrimaryButtonText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showLoginModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowLoginModal(false);
+          setPinInput('');
+          setPinError(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Enter Access PIN</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowLoginModal(false);
+                  setPinInput('');
+                  setPinError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>PIN</Text>
+              <View style={styles.pinInputContainer}>
+                <TextInput
+                  style={styles.pinInput}
+                  placeholder="Enter PIN"
+                  placeholderTextColor={Colors.textMuted}
+                  value={pinInput}
+                  onChangeText={setPinInput}
+                  secureTextEntry={!showPin}
+                  keyboardType="number-pad"
+                  maxLength={8}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPin(!showPin)}
+                  style={styles.eyeButton}
+                >
+                  {showPin ? (
+                    <EyeOff size={20} color={Colors.textSecondary} />
+                  ) : (
+                    <Eye size={20} color={Colors.textSecondary} />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {pinError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{pinError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.connectButton}
+              onPress={handleLogin}
+              activeOpacity={0.7}
+            >
+              <Unlock size={20} color={Colors.white} />
+              <Text style={styles.connectButtonText}>Unlock</Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalInfoText}>
+                Contact your administrator if you need access.
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showChangePinModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowChangePinModal(false);
+          setCurrentPinInput('');
+          setNewPinInput('');
+          setPinError(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Admin PIN</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowChangePinModal(false);
+                  setCurrentPinInput('');
+                  setNewPinInput('');
+                  setPinError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Current Admin PIN</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter current PIN"
+                placeholderTextColor={Colors.textMuted}
+                value={currentPinInput}
+                onChangeText={setCurrentPinInput}
+                secureTextEntry
+                keyboardType="number-pad"
+                maxLength={8}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>New Admin PIN</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter new PIN (min 4 digits)"
+                placeholderTextColor={Colors.textMuted}
+                value={newPinInput}
+                onChangeText={setNewPinInput}
+                secureTextEntry
+                keyboardType="number-pad"
+                maxLength={8}
+              />
+            </View>
+
+            {pinError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{pinError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.connectButton}
+              onPress={handleChangeAdminPin}
+              activeOpacity={0.7}
+            >
+              <Key size={20} color={Colors.white} />
+              <Text style={styles.connectButtonText}>Change Admin PIN</Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalInfoText}>
+                Changing the admin PIN will log out all other admin sessions.
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showEditorPinModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowEditorPinModal(false);
+          setAdminVerifyPin('');
+          setEditorPinInput('');
+          setPinError(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editorPinEnabled ? 'Change Editor PIN' : 'Set Editor PIN'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowEditorPinModal(false);
+                  setAdminVerifyPin('');
+                  setEditorPinInput('');
+                  setPinError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Verify Admin PIN</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your admin PIN"
+                placeholderTextColor={Colors.textMuted}
+                value={adminVerifyPin}
+                onChangeText={setAdminVerifyPin}
+                secureTextEntry
+                keyboardType="number-pad"
+                maxLength={8}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>New Editor PIN</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="PIN for editors (min 4 digits)"
+                placeholderTextColor={Colors.textMuted}
+                value={editorPinInput}
+                onChangeText={setEditorPinInput}
+                secureTextEntry
+                keyboardType="number-pad"
+                maxLength={8}
+              />
+            </View>
+
+            {pinError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{pinError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.connectButton}
+              onPress={handleSetEditorPin}
+              activeOpacity={0.7}
+            >
+              <Users size={20} color={Colors.white} />
+              <Text style={styles.connectButtonText}>
+                {editorPinEnabled ? 'Update Editor PIN' : 'Enable Editor Access'}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalInfoText}>
+                Share this PIN with people you trust to help with check-ins. They will be able to check in players and add new players, but cannot change settings.
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showRevokeModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowRevokeModal(false);
+          setAdminVerifyPin('');
+          setPinError(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Disable Editor Access</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowRevokeModal(false);
+                  setAdminVerifyPin('');
+                  setPinError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Verify Admin PIN</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter your admin PIN"
+                placeholderTextColor={Colors.textMuted}
+                value={adminVerifyPin}
+                onChangeText={setAdminVerifyPin}
+                secureTextEntry
+                keyboardType="number-pad"
+                maxLength={8}
+              />
+            </View>
+
+            {pinError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{pinError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.connectButton, styles.dangerButton]}
+              onPress={handleConfirmDisableEditor}
+              activeOpacity={0.7}
+            >
+              <UserX size={20} color={Colors.white} />
+              <Text style={styles.connectButtonText}>Disable Editor Access</Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalInfoText}>
+                This will immediately revoke all editor sessions. Editors will need to contact you to regain access.
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showJoinOrgModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowJoinOrgModal(false);
+          setOrgCodeInput('');
+          setOrgError(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Join Organization</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowJoinOrgModal(false);
+                  setOrgCodeInput('');
+                  setOrgError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Organization Code</Text>
+              <TextInput
+                style={[styles.input, styles.codeInput]}
+                placeholder="Enter 6-character code"
+                placeholderTextColor={Colors.textMuted}
+                value={orgCodeInput}
+                onChangeText={(text) => setOrgCodeInput(text.toUpperCase())}
+                autoCapitalize="characters"
+                maxLength={6}
+              />
+            </View>
+
+            {orgError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{orgError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.connectButton}
+              onPress={handleJoinOrg}
+              activeOpacity={0.7}
+            >
+              <LogIn size={20} color={Colors.white} />
+              <Text style={styles.connectButtonText}>Join</Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalInfoText}>
+                Ask your organization admin for the invite code
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showCreateOrgModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowCreateOrgModal(false);
+          setNewOrgName('');
+          setOrgError(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Create Organization</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowCreateOrgModal(false);
+                  setNewOrgName('');
+                  setOrgError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Organization Name</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g., Utah Little Rugby"
+                placeholderTextColor={Colors.textMuted}
+                value={newOrgName}
+                onChangeText={setNewOrgName}
+              />
+            </View>
+
+            {orgError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{orgError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.connectButton}
+              onPress={handleCreateOrg}
+              activeOpacity={0.7}
+            >
+              <Building2 size={20} color={Colors.white} />
+              <Text style={styles.connectButtonText}>Create Organization</Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalInfoText}>
+                You will be the admin of this organization and can invite volunteers
+              </Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showPrivacyPolicy}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowPrivacyPolicy(false)}
+      >
+        <View style={styles.privacyModalContainer}>
+          <View style={styles.privacyModalHeader}>
+            <Text style={styles.privacyModalTitle}>Privacy Policy</Text>
+            <TouchableOpacity
+              style={styles.privacyCloseButton}
+              onPress={() => setShowPrivacyPolicy(false)}
+            >
+              <X size={24} color={Colors.text} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.privacyContent} showsVerticalScrollIndicator={false}>
+            <Text style={styles.privacyLastUpdated}>Last Updated: January 22, 2025</Text>
+            
+            <Text style={styles.privacySection}>1. Introduction</Text>
+            <Text style={styles.privacyText}>
+              Utah Little Rugby (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) operates the Youth Sports Registration mobile application (the &quot;App&quot;). This Privacy Policy explains how we collect, use, disclose, and safeguard your information when you use our App.
+            </Text>
+            <Text style={styles.privacyText}>
+              Please read this Privacy Policy carefully. By using the App, you agree to the collection and use of information in accordance with this policy.
+            </Text>
+
+            <Text style={styles.privacySection}>2. Information We Collect</Text>
+            <Text style={styles.privacySubsection}>2.1 Information You Provide</Text>
+            <Text style={styles.privacyText}>
+              We collect information that you voluntarily provide when using the App, including:{"\n"}
+              • Player registration information (name, date of birth, age group, division){"\n"}
+              • Parent/guardian contact information (name, phone number){"\n"}
+              • Club and team affiliations{"\n"}
+              • Weight information for age/division verification{"\n"}
+              • Photos for player identification (if provided)
+            </Text>
+
+            <Text style={styles.privacySubsection}>2.2 Information Collected Automatically</Text>
+            <Text style={styles.privacyText}>
+              When you use the App, we may automatically collect:{"\n"}
+              • Device information (device type, operating system){"\n"}
+              • App usage data and check-in timestamps{"\n"}
+              • Error logs for troubleshooting purposes
+            </Text>
+
+            <Text style={styles.privacySection}>3. How We Use Your Information</Text>
+            <Text style={styles.privacyText}>
+              We use the collected information to:{"\n"}
+              • Facilitate player registration and check-in at events{"\n"}
+              • Verify player eligibility based on age and weight requirements{"\n"}
+              • Manage rosters and team assignments{"\n"}
+              • Communicate with parents/guardians regarding events{"\n"}
+              • Improve and maintain the App{"\n"}
+              • Comply with legal obligations and safety requirements
+            </Text>
+
+            <Text style={styles.privacySection}>4. Children&apos;s Privacy (COPPA Compliance)</Text>
+            <Text style={styles.privacyText}>
+              Our App is designed for youth sports management and inherently involves the collection of information about children under 13. We take children&apos;s privacy very seriously and comply with the Children&apos;s Online Privacy Protection Act (COPPA).
+            </Text>
+            <Text style={styles.privacyText}>
+              • We collect only the minimum information necessary for sports registration and safety{"\n"}
+              • Information about minors is provided by parents/guardians or authorized organization administrators{"\n"}
+              • Parents/guardians may review, correct, or request deletion of their child&apos;s information by contacting us{"\n"}
+              • We do not condition participation on the disclosure of more information than reasonably necessary{"\n"}
+              • We do not share children&apos;s information with third parties for marketing purposes
+            </Text>
+
+            <Text style={styles.privacySection}>5. Data Storage and Security</Text>
+            <Text style={styles.privacyText}>
+              We implement appropriate technical and organizational measures to protect your personal information:{"\n"}
+              • Data is stored securely using industry-standard encryption{"\n"}
+              • Access to player data is restricted through PIN-based authentication{"\n"}
+              • Organization administrators control who has access to their data{"\n"}
+              • We regularly review and update our security practices
+            </Text>
+            <Text style={styles.privacyText}>
+              While we strive to protect your information, no method of electronic storage is 100% secure. We cannot guarantee absolute security.
+            </Text>
+
+            <Text style={styles.privacySection}>6. Data Sharing and Disclosure</Text>
+            <Text style={styles.privacyText}>
+              We do not sell your personal information. We may share information:{"\n"}
+              • With organization administrators and authorized volunteers for event management{"\n"}
+              • When required by law or to respond to legal process{"\n"}
+              • To protect the safety of players, staff, or the public{"\n"}
+              • With service providers who assist in App operations (under strict confidentiality agreements)
+            </Text>
+
+            <Text style={styles.privacySection}>7. Third-Party Services</Text>
+            <Text style={styles.privacyText}>
+              The App may integrate with third-party services such as Google Sheets for data import. When you connect to third-party services, their privacy policies apply to your use of those services. We encourage you to review their privacy policies.
+            </Text>
+
+            <Text style={styles.privacySection}>8. Data Retention</Text>
+            <Text style={styles.privacyText}>
+              We retain personal information only for as long as necessary to fulfill the purposes outlined in this Privacy Policy, unless a longer retention period is required by law. Registration data is typically retained for the duration of the sports season and may be deleted upon request.
+            </Text>
+
+            <Text style={styles.privacySection}>9. Your Rights and Choices</Text>
+            <Text style={styles.privacyText}>
+              You have the right to:{"\n"}
+              • Access the personal information we hold about you or your child{"\n"}
+              • Request correction of inaccurate information{"\n"}
+              • Request deletion of personal information{"\n"}
+              • Withdraw consent for data processing{"\n"}
+              • Request a copy of your data in a portable format
+            </Text>
+            <Text style={styles.privacyText}>
+              To exercise these rights, please contact your organization administrator or reach out to us directly.
+            </Text>
+
+            <Text style={styles.privacySection}>10. California Privacy Rights</Text>
+            <Text style={styles.privacyText}>
+              California residents may have additional rights under the California Consumer Privacy Act (CCPA), including the right to know what personal information is collected and how it is used, and the right to request deletion of personal information.
+            </Text>
+
+            <Text style={styles.privacySection}>11. Changes to This Privacy Policy</Text>
+            <Text style={styles.privacyText}>
+              We may update this Privacy Policy from time to time. We will notify you of any changes by posting the new Privacy Policy in the App and updating the Last Updated date. You are advised to review this Privacy Policy periodically.
+            </Text>
+
+            <Text style={styles.privacySection}>12. Contact Us</Text>
+            <Text style={styles.privacyText}>
+              If you have questions about this Privacy Policy or our data practices, please contact us:{"\n\n"}
+              Utah Little Rugby{"\n"}
+              Email: utahsportsrecording@gmail.com{"\n\n"}
+              For questions about your child&apos;s information or to exercise your parental rights under COPPA, please contact your organization administrator or email us at the address above.
+            </Text>
+
+            <View style={styles.privacyFooter}>
+              <Text style={styles.privacyFooterText}>
+                By using this App, you acknowledge that you have read and understood this Privacy Policy.
+              </Text>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showTermsOfService}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowTermsOfService(false)}
+      >
+        <View style={styles.privacyModalContainer}>
+          <View style={styles.privacyModalHeader}>
+            <Text style={styles.privacyModalTitle}>Terms of Service</Text>
+            <TouchableOpacity
+              style={styles.privacyCloseButton}
+              onPress={() => setShowTermsOfService(false)}
+            >
+              <X size={24} color={Colors.text} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.privacyContent} showsVerticalScrollIndicator={false}>
+            <Text style={styles.privacyLastUpdated}>Last Updated: January 22, 2025</Text>
+            
+            <Text style={styles.privacySection}>1. Acceptance of Terms</Text>
+            <Text style={styles.privacyText}>
+              By accessing or using the Utah Little Rugby mobile application (the &quot;App&quot;), you agree to be bound by these Terms of Service (&quot;Terms&quot;). If you do not agree to these Terms, please do not use the App.
+            </Text>
+
+            <Text style={styles.privacySection}>2. Description of Service</Text>
+            <Text style={styles.privacyText}>
+              The App provides youth sports registration and player check-in management services for Utah Little Rugby events. The App allows authorized users to:{"\n"}
+              • Manage player rosters and registrations{"\n"}
+              • Check in players at events{"\n"}
+              • Verify player eligibility based on age and weight{"\n"}
+              • Import player data from external sources{"\n"}
+              • Manage organization access and permissions
+            </Text>
+
+            <Text style={styles.privacySection}>3. User Accounts and Access</Text>
+            <Text style={styles.privacyText}>
+              Access to certain features requires authentication via PIN codes. You are responsible for:{"\n"}
+              • Maintaining the confidentiality of your access credentials{"\n"}
+              • All activities that occur under your access{"\n"}
+              • Notifying your organization administrator immediately of any unauthorized use{"\n"}
+              • Ensuring that only authorized personnel have access to sensitive player information
+            </Text>
+
+            <Text style={styles.privacySection}>4. Acceptable Use</Text>
+            <Text style={styles.privacyText}>
+              You agree to use the App only for lawful purposes and in accordance with these Terms. You agree NOT to:{"\n"}
+              • Use the App for any purpose other than youth sports management{"\n"}
+              • Share access credentials with unauthorized individuals{"\n"}
+              • Attempt to gain unauthorized access to any portion of the App{"\n"}
+              • Use the App to collect or store personal information beyond what is necessary for sports registration{"\n"}
+              • Misuse, alter, or falsify player information{"\n"}
+              • Use the App in any way that violates applicable laws or regulations
+            </Text>
+
+            <Text style={styles.privacySection}>5. Player Data and Privacy</Text>
+            <Text style={styles.privacyText}>
+              The App handles sensitive information about minors. All users must:{"\n"}
+              • Comply with our Privacy Policy{"\n"}
+              • Handle player information with appropriate care and confidentiality{"\n"}
+              • Only access player information necessary for their role{"\n"}
+              • Not share player information outside the App without proper authorization{"\n"}
+              • Report any data breaches or security concerns immediately
+            </Text>
+
+            <Text style={styles.privacySection}>6. Intellectual Property</Text>
+            <Text style={styles.privacyText}>
+              The App and its original content, features, and functionality are owned by Utah Little Rugby and are protected by international copyright, trademark, and other intellectual property laws. You may not copy, modify, distribute, sell, or lease any part of the App without express written permission.
+            </Text>
+
+            <Text style={styles.privacySection}>7. Third-Party Services</Text>
+            <Text style={styles.privacyText}>
+              The App may integrate with third-party services such as Google Sheets. Your use of such services is subject to their respective terms of service. We are not responsible for the content, privacy policies, or practices of third-party services.
+            </Text>
+
+            <Text style={styles.privacySection}>8. Disclaimer of Warranties</Text>
+            <Text style={styles.privacyText}>
+              THE APP IS PROVIDED &quot;AS IS&quot; AND &quot;AS AVAILABLE&quot; WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED. WE DO NOT WARRANT THAT THE APP WILL BE UNINTERRUPTED, SECURE, OR ERROR-FREE. USE OF THE APP IS AT YOUR OWN RISK.
+            </Text>
+
+            <Text style={styles.privacySection}>9. Limitation of Liability</Text>
+            <Text style={styles.privacyText}>
+              TO THE MAXIMUM EXTENT PERMITTED BY LAW, UTAH LITTLE RUGBY SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, OR ANY LOSS OF PROFITS OR REVENUES, WHETHER INCURRED DIRECTLY OR INDIRECTLY, OR ANY LOSS OF DATA, USE, GOODWILL, OR OTHER INTANGIBLE LOSSES RESULTING FROM YOUR USE OF THE APP.
+            </Text>
+
+            <Text style={styles.privacySection}>10. Indemnification</Text>
+            <Text style={styles.privacyText}>
+              You agree to indemnify and hold harmless Utah Little Rugby, its officers, directors, employees, and agents from any claims, damages, losses, liabilities, and expenses (including attorneys&apos; fees) arising out of or related to your use of the App or violation of these Terms.
+            </Text>
+
+            <Text style={styles.privacySection}>11. Termination</Text>
+            <Text style={styles.privacyText}>
+              We may terminate or suspend your access to the App immediately, without prior notice or liability, for any reason, including if you breach these Terms. Upon termination, your right to use the App will immediately cease.
+            </Text>
+
+            <Text style={styles.privacySection}>12. Changes to Terms</Text>
+            <Text style={styles.privacyText}>
+              We reserve the right to modify these Terms at any time. We will notify users of any material changes by posting the new Terms in the App. Your continued use of the App after such modifications constitutes your acceptance of the revised Terms.
+            </Text>
+
+            <Text style={styles.privacySection}>13. Governing Law</Text>
+            <Text style={styles.privacyText}>
+              These Terms shall be governed by and construed in accordance with the laws of the State of Utah, without regard to its conflict of law provisions.
+            </Text>
+
+            <Text style={styles.privacySection}>14. Contact Information</Text>
+            <Text style={styles.privacyText}>
+              If you have any questions about these Terms, please contact us:{"\n\n"}
+              Utah Little Rugby{"\n"}
+              Email: utahsportsrecording@gmail.com
+            </Text>
+
+            <View style={styles.privacyFooter}>
+              <Text style={styles.privacyFooterText}>
+                By using this App, you acknowledge that you have read, understood, and agree to be bound by these Terms of Service.
+              </Text>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showImportedSheetsModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowImportedSheetsModal(false)}
+      >
+        <View style={styles.sheetsModalContainer}>
+          <View style={styles.sheetsModalHeader}>
+            <TouchableOpacity
+              style={styles.sheetsBackButton}
+              onPress={() => setShowImportedSheetsModal(false)}
+            >
+              <ChevronLeft size={24} color={Colors.text} />
+            </TouchableOpacity>
+            <Text style={styles.sheetsModalHeaderTitle}>Imported Sheets</Text>
+            <View style={styles.sheetsHeaderSpacer} />
+          </View>
+
+          <ScrollView style={styles.importedSheetsContent} contentContainerStyle={{ paddingBottom: 40 }}>
+            <Text style={styles.importedSheetsDescription}>
+              These are all the Google Sheets you&apos;ve imported. Share access codes with users who need to re-import data. Default permissions are view-only.
+            </Text>
+
+            {importedSheets.map((sheet) => (
+              <View key={sheet.id} style={styles.importedSheetCard}>
+                <View style={styles.importedSheetHeader}>
+                  <FileSpreadsheet size={24} color="#34A853" />
+                  <View style={styles.importedSheetInfo}>
+                    <Text style={styles.importedSheetTitle}>{sheet.title}</Text>
+                    <Text style={styles.importedSheetMeta}>
+                      {sheet.playerCount} players • Imported {new Date(sheet.importedAt).toLocaleDateString()}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.accessCodeSection}>
+                  <Text style={styles.accessCodeLabel}>Access Code</Text>
+                  <View style={styles.accessCodeRow}>
+                    <Text style={styles.accessCodeValue}>{sheet.accessCode}</Text>
+                    <TouchableOpacity
+                      style={styles.accessCodeCopyButton}
+                      onPress={async () => {
+                        await Clipboard.setStringAsync(sheet.accessCode);
+                        Alert.alert('Copied!', `Access code ${sheet.accessCode} copied to clipboard.`);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Copy size={16} color={Colors.primary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.sheetPermissionsSection}>
+                  <Text style={styles.sheetPermissionsTitle}>Permissions</Text>
+                  
+                  <View style={styles.permissionRow}>
+                    <View style={styles.permissionInfo}>
+                      {sheet.isLocked ? (
+                        <LockKeyhole size={18} color={Colors.warning} />
+                      ) : (
+                        <UnlockKeyhole size={18} color={Colors.success} />
+                      )}
+                      <View style={styles.permissionTextContainer}>
+                        <Text style={styles.permissionLabel}>
+                          {sheet.isLocked ? 'Sheet Locked' : 'Sheet Unlocked'}
+                        </Text>
+                        <Text style={styles.permissionHint}>
+                          {sheet.isLocked 
+                            ? 'Users cannot re-import from this sheet' 
+                            : 'Users with code can re-import data'}
+                        </Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={[
+                        styles.permissionToggle,
+                        sheet.isLocked && styles.permissionToggleActive
+                      ]}
+                      onPress={() => toggleSheetLock(sheet.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[
+                        styles.permissionToggleText,
+                        sheet.isLocked && styles.permissionToggleTextActive
+                      ]}>
+                        {sheet.isLocked ? 'Unlock' : 'Lock'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.permissionRow}>
+                    <View style={styles.permissionInfo}>
+                      {sheet.allowEditing ? (
+                        <Edit3 size={18} color={Colors.success} />
+                      ) : (
+                        <Eye size={18} color={Colors.textSecondary} />
+                      )}
+                      <View style={styles.permissionTextContainer}>
+                        <Text style={styles.permissionLabel}>
+                          {sheet.allowEditing ? 'Editing Allowed' : 'View Only'}
+                        </Text>
+                        <Text style={styles.permissionHint}>
+                          {sheet.allowEditing 
+                            ? 'Users with code can make edits' 
+                            : 'Users can only view, not edit'}
+                        </Text>
+                      </View>
+                    </View>
+                    <TouchableOpacity
+                      style={[
+                        styles.permissionToggle,
+                        sheet.allowEditing && styles.permissionToggleActive
+                      ]}
+                      onPress={() => toggleSheetEditing(sheet.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[
+                        styles.permissionToggleText,
+                        sheet.allowEditing && styles.permissionToggleTextActive
+                      ]}>
+                        {sheet.allowEditing ? 'Disable' : 'Allow'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                <View style={styles.sheetActionsRow}>
+                  <TouchableOpacity
+                    style={styles.sheetActionButton}
+                    onPress={() => {
+                      setShowImportedSheetsModal(false);
+                      setSheetUrl(sheet.url);
+                      setShowConnectModal(true);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <RefreshCw size={16} color={Colors.primary} />
+                    <Text style={styles.sheetActionButtonText}>Re-import</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.sheetActionButton, styles.sheetActionButtonDanger]}
+                    onPress={() => {
+                      Alert.alert(
+                        'Remove Sheet',
+                        'This will remove the sheet from your history. The access code will no longer work. Continue?',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Remove',
+                            style: 'destructive',
+                            onPress: () => deleteImportedSheet(sheet.id),
+                          },
+                        ]
+                      );
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Trash2 size={16} color={Colors.error} />
+                    <Text style={[styles.sheetActionButtonText, styles.sheetActionButtonTextDanger]}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </Modal>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  content: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  header: {
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  subtitle: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+    marginTop: 4,
+  },
+  section: {
+    marginBottom: 28,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  iconBg: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  cardContent: {
+    flex: 1,
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  cardDescription: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  connectedCard: {
+    backgroundColor: '#E8F5E9',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#A5D6A7',
+  },
+  connectedCardError: {
+    backgroundColor: Colors.warningLight,
+    borderColor: Colors.warning,
+  },
+  connectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  connectedTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: '#2E7D32',
+    marginLeft: 10,
+  },
+  connectedTitleError: {
+    color: Colors.warning,
+  },
+  errorBanner: {
+    backgroundColor: 'rgba(255, 152, 0, 0.15)',
+    padding: 10,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  errorBannerText: {
+    fontSize: 12,
+    color: Colors.warning,
+  },
+  syncTime: {
+    fontSize: 12,
+    color: '#558B2F',
+    marginTop: 4,
+    fontStyle: 'italic' as const,
+  },
+  connectedDetail: {
+    fontSize: 13,
+    color: '#558B2F',
+    marginBottom: 4,
+  },
+  connectedActions: {
+    flexDirection: 'row',
+    marginTop: 12,
+    gap: 10,
+  },
+  refreshButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  refreshButtonDisabled: {
+    opacity: 0.7,
+  },
+  refreshButtonText: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.primary,
+  },
+  disconnectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  disconnectButtonText: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.error,
+  },
+  statusCard: {
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 4,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statusLabel: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginLeft: 8,
+  },
+  statusValue: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  statusNote: {
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  infoCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  infoRow: {
+    flexDirection: 'row',
+  },
+  infoContent: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  infoTitle: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  infoText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+  footer: {
+    alignItems: 'center',
+    paddingTop: 20,
+  },
+  footerText: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 24,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginBottom: 8,
+  },
+  input: {
+    backgroundColor: Colors.background,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 15,
+    color: Colors.text,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.errorLight,
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 16,
+    gap: 8,
+  },
+  errorText: {
+    fontSize: 14,
+    color: Colors.error,
+    flex: 1,
+  },
+  connectButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+  },
+  dangerButton: {
+    backgroundColor: Colors.error,
+  },
+  connectButtonText: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.white,
+  },
+  modalInfo: {
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 10,
+  },
+  modalInfoText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+  },
+  adminCard: {
+    backgroundColor: Colors.primaryLight,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+  },
+  editorCard: {
+    backgroundColor: '#E3F2FD',
+    borderColor: '#2196F3',
+  },
+  adminHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  adminTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.primary,
+    marginLeft: 10,
+  },
+  editorTitle: {
+    color: '#1976D2',
+  },
+  adminDetail: {
+    fontSize: 13,
+    color: Colors.text,
+    marginBottom: 4,
+    lineHeight: 20,
+  },
+  adminActions: {
+    flexDirection: 'row',
+    marginTop: 12,
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  changePinButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  changePinButtonText: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.primary,
+  },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  logoutButtonText: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.warning,
+  },
+  viewerCard: {
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  viewerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  viewerTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+    marginLeft: 10,
+  },
+  viewerDetail: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginBottom: 4,
+    lineHeight: 20,
+  },
+  unlockButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    marginTop: 12,
+    gap: 8,
+  },
+  unlockButtonText: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.white,
+  },
+  pinInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.background,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  pinInput: {
+    flex: 1,
+    padding: 14,
+    fontSize: 15,
+    color: Colors.text,
+  },
+  eyeButton: {
+    padding: 14,
+  },
+  editorManagementCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  editorStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  editorStatusContent: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  editorStatusTitle: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  editorStatusSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  editorActions: {
+    flexDirection: 'row',
+    marginTop: 16,
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  editorActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  editorActionDanger: {
+    backgroundColor: Colors.errorLight,
+  },
+  editorActionText: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.primary,
+  },
+  editorActionTextDanger: {
+    color: Colors.error,
+  },
+  sheetsModalContainer: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  sheetsModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  sheetsModalHeaderTitle: {
+    fontSize: 18,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  sheetsCloseButton: {
+    padding: 4,
+  },
+  sheetsBackButton: {
+    padding: 4,
+    marginRight: 8,
+  },
+  sheetsHeaderSpacer: {
+    width: 32,
+  },
+  sheetsStepContainer: {
+    flex: 1,
+    padding: 20,
+  },
+  sheetsUploadIcon: {
+    alignSelf: 'center',
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+    marginTop: 40,
+  },
+  sheetsSuccessIcon: {
+    alignSelf: 'center',
+    marginBottom: 24,
+    marginTop: 40,
+  },
+  sheetsStepTitle: {
+    fontSize: 24,
+    fontWeight: '700' as const,
+    color: Colors.text,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  sheetsStepDescription: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  sheetsInputContainer: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  sheetsInputLabel: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.text,
+    marginBottom: 8,
+  },
+  sheetsUrlInput: {
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: Colors.text,
+  },
+  sheetsFormatInfo: {
+    backgroundColor: Colors.surfaceAlt,
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 24,
+  },
+  sheetsFormatTitle: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginBottom: 8,
+  },
+  sheetsFormatText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+  sheetsPrimaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    gap: 8,
+  },
+  sheetsPrimaryButtonText: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.white,
+  },
+  sheetsPrimaryButtonDisabled: {
+    backgroundColor: Colors.textMuted,
+  },
+  sheetsSecondaryButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginRight: 12,
+  },
+  sheetsSecondaryButtonText: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+  },
+  sheetsButtonRow: {
+    flexDirection: 'row',
+    marginTop: 16,
+  },
+  sheetsMappingList: {
+    flex: 1,
+  },
+  sheetsMappingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  sheetsMappingField: {
+    width: 100,
+  },
+  sheetsMappingFieldLabel: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.text,
+  },
+  sheetsRequiredStar: {
+    color: Colors.error,
+  },
+  sheetsMappingOptions: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  sheetsMappingOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: Colors.surfaceAlt,
+    marginRight: 8,
+  },
+  sheetsMappingOptionSelected: {
+    backgroundColor: Colors.primary,
+  },
+  sheetsMappingOptionText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  sheetsMappingOptionTextSelected: {
+    color: Colors.white,
+    fontWeight: '500' as const,
+  },
+  sheetsPreviewList: {
+    flex: 1,
+    marginBottom: 16,
+  },
+  sheetsPreviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  sheetsPreviewIndex: {
+    width: 32,
+    fontSize: 13,
+    color: Colors.textMuted,
+  },
+  sheetsPreviewInfo: {
+    flex: 1,
+  },
+  sheetsPreviewName: {
+    fontSize: 15,
+    fontWeight: '500' as const,
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  sheetsPreviewMeta: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  sheetsPreviewMore: {
+    fontSize: 14,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: 16,
+  },
+  orgCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  orgHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  orgInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  orgName: {
+    fontSize: 18,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  orgRole: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  orgCodeSection: {
+    marginTop: 16,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  orgCodeLabel: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  orgCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  orgCode: {
+    fontSize: 28,
+    fontWeight: '700' as const,
+    color: Colors.primary,
+    letterSpacing: 4,
+    flex: 1,
+  },
+  copyButton: {
+    padding: 10,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  shareButton: {
+    padding: 10,
+    backgroundColor: Colors.primaryLight,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  orgCodeHint: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 8,
+    lineHeight: 16,
+  },
+  switchOrgButton: {
+    marginTop: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  switchOrgText: {
+    fontSize: 14,
+    color: Colors.primary,
+    fontWeight: '500' as const,
+  },
+  noOrgCard: {
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 14,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  noOrgTitle: {
+    fontSize: 18,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  noOrgText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  orgActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  joinOrgButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    gap: 8,
+  },
+  joinOrgButtonText: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.white,
+  },
+  createOrgButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    gap: 8,
+  },
+  createOrgButtonText: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.primary,
+  },
+  codeInput: {
+    fontSize: 24,
+    fontWeight: '600' as const,
+    letterSpacing: 8,
+    textAlign: 'center',
+  },
+  privacyModalContainer: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  privacyModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  privacyModalTitle: {
+    fontSize: 18,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  privacyCloseButton: {
+    padding: 4,
+  },
+  privacyContent: {
+    flex: 1,
+    padding: 20,
+  },
+  privacyLastUpdated: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    marginBottom: 20,
+    fontStyle: 'italic' as const,
+  },
+  privacySection: {
+    fontSize: 17,
+    fontWeight: '700' as const,
+    color: Colors.text,
+    marginTop: 24,
+    marginBottom: 12,
+  },
+  privacySubsection: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  privacyText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    lineHeight: 22,
+    marginBottom: 12,
+  },
+  privacyFooter: {
+    marginTop: 32,
+    marginBottom: 40,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+  },
+  privacyFooterText: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    fontStyle: 'italic' as const,
+    lineHeight: 20,
+  },
+  savedSheetCard: {
+    backgroundColor: '#E8F5E9',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#A5D6A7',
+  },
+  savedSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  savedSheetInfo: {
+    marginLeft: 10,
+    flex: 1,
+  },
+  savedSheetTitle: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: '#2E7D32',
+  },
+  savedSheetDetail: {
+    fontSize: 12,
+    color: '#558B2F',
+    marginTop: 2,
+  },
+  savedSheetId: {
+    fontSize: 12,
+    color: '#558B2F',
+    marginBottom: 12,
+  },
+  savedSheetActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  reImportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#34A853',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  reImportButtonText: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.white,
+  },
+  enableWriteBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.white,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#34A853',
+    gap: 6,
+  },
+  enableWriteBackText: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: '#34A853',
+  },
+  importedSheetsContent: {
+    flex: 1,
+    padding: 20,
+  },
+  importedSheetsDescription: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  importedSheetCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  importedSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  importedSheetInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  importedSheetTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  importedSheetMeta: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  accessCodeSection: {
+    backgroundColor: '#E8F5E9',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 16,
+  },
+  accessCodeLabel: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    color: '#558B2F',
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  accessCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  accessCodeValue: {
+    fontSize: 24,
+    fontWeight: '700' as const,
+    color: '#2E7D32',
+    letterSpacing: 4,
+  },
+  accessCodeCopyButton: {
+    padding: 8,
+    backgroundColor: Colors.white,
+    borderRadius: 8,
+  },
+  sheetPermissionsSection: {
+    marginBottom: 16,
+  },
+  sheetPermissionsTitle: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+    marginBottom: 12,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+  },
+  permissionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  permissionInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  permissionTextContainer: {
+    marginLeft: 10,
+    flex: 1,
+  },
+  permissionLabel: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.text,
+  },
+  permissionHint: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  permissionToggle: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  permissionToggleActive: {
+    backgroundColor: Colors.primaryLight,
+  },
+  permissionToggleText: {
+    fontSize: 13,
+    fontWeight: '500' as const,
+    color: Colors.textSecondary,
+  },
+  permissionToggleTextActive: {
+    color: Colors.primary,
+  },
+  sheetActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  sheetActionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primaryLight,
+    paddingVertical: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  sheetActionButtonDanger: {
+    backgroundColor: Colors.errorLight,
+  },
+  sheetActionButtonText: {
+    fontSize: 14,
+    fontWeight: '500' as const,
+    color: Colors.primary,
+  },
+  sheetActionButtonTextDanger: {
+    color: Colors.error,
+  },
+});
