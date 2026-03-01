@@ -13,6 +13,12 @@ jobs:
         with:
           node-version: 18
 
+      # Install dependencies (your repo has bun.lock)
+      - name: Install dependencies (bun)
+        run: |
+          npm i -g bun
+          bun install --frozen-lockfile
+
       - name: Install EAS CLI
         run: npm i -g eas-cli
 
