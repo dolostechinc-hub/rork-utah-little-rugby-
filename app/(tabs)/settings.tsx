@@ -47,9 +47,16 @@ import {
   Edit3,
   LockKeyhole,
   UnlockKeyhole,
+  Scale,
+  AlertTriangle,
+  Coins,
+  ArrowUp,
+  Link,
 } from 'lucide-react-native';
 import { ParsedPlayer } from '@/components/CSVImportModal';
 import { useRouter } from 'expo-router';
+import { Linking } from 'react-native';
+import { WEIGHT_LIMITS } from '@/utils/playerUtils';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRegistration } from '@/contexts/RegistrationContext';
@@ -1127,6 +1134,101 @@ export default function SettingsScreen() {
           )}
         </View>
       )}
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Built-in Rules</Text>
+
+        <View style={styles.rulesCard}>
+          <View style={styles.rulesHeader}>
+            <View style={styles.rulesIconContainer}>
+              <Scale size={22} color="#D97706" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rulesHeaderTitle}>Weight Restrictions</Text>
+              <Text style={styles.rulesHeaderSubtitle}>Restricted Division limits</Text>
+            </View>
+          </View>
+
+          <View style={styles.weightTable}>
+            <View style={styles.weightTableHeader}>
+              <Text style={styles.weightTableHeaderText}>Age Group</Text>
+              <Text style={styles.weightTableHeaderText}>Max Weight</Text>
+            </View>
+            {[
+              { group: 'U8', limit: 100 },
+              { group: 'U10', limit: 120 },
+              { group: 'U12', limit: 140 },
+              { group: 'U14', limit: 180 },
+            ].map((item, index) => (
+              <View key={item.group} style={[styles.weightTableRow, index % 2 === 0 && styles.weightTableRowAlt]}>
+                <Text style={styles.weightTableGroup}>{item.group}</Text>
+                <Text style={styles.weightTableLimit}>{item.limit} lbs</Text>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.rulesDivider} />
+
+          <View style={styles.rulesOptionsSection}>
+            <Text style={styles.rulesOptionsTitle}>When a player exceeds the weight limit in a Restricted division:</Text>
+            <View style={styles.rulesOptionRow}>
+              <View style={[styles.rulesOptionIcon, { backgroundColor: '#FEF3C7' }]}>
+                <Coins size={16} color="#F59E0B" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rulesOptionLabel}>Penny Player</Text>
+                <Text style={styles.rulesOptionDesc}>Touch only — no tackling allowed</Text>
+              </View>
+            </View>
+            <View style={styles.rulesOptionRow}>
+              <View style={[styles.rulesOptionIcon, { backgroundColor: '#EDE9FE' }]}>
+                <ArrowUp size={16} color="#8B5CF6" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rulesOptionLabel}>Play Up</Text>
+                <Text style={styles.rulesOptionDesc}>Move to the next age group with no weight restrictions</Text>
+              </View>
+            </View>
+            <View style={styles.rulesOptionRow}>
+              <View style={[styles.rulesOptionIcon, { backgroundColor: '#DBEAFE' }]}>
+                <Users size={16} color="#3B82F6" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rulesOptionLabel}>Open Division</Text>
+                <Text style={styles.rulesOptionDesc}>Play in the Open division with no weight limit</Text>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.rulesNote}>
+            <AlertTriangle size={14} color="#D97706" />
+            <Text style={styles.rulesNoteText}>
+              These rules apply only to the Restricted division. Open division has no weight limits.
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Resources</Text>
+
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => Linking.openURL('https://docs.google.com/spreadsheets/d/1RwTB0Dnv1fe5Hgz0oa9Y5Y1A245fav9ZKOXzecA6b5Q/edit?usp=sharing')}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.iconBg, { backgroundColor: '#E8F5E9' }]}>
+            <FileSpreadsheet size={24} color="#34A853" />
+          </View>
+          <View style={styles.cardContent}>
+            <Text style={styles.cardTitle}>Google Sheet Template</Text>
+            <Text style={styles.cardDescription}>
+              Use this template when creating your organization's roster spreadsheet
+            </Text>
+          </View>
+          <Link size={20} color={Colors.textMuted} />
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>About</Text>
@@ -3410,5 +3512,131 @@ const styles = StyleSheet.create({
   },
   sheetActionButtonTextDanger: {
     color: Colors.error,
+  },
+  rulesCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  rulesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  rulesIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  rulesHeaderTitle: {
+    fontSize: 17,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  rulesHeaderSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  weightTable: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: Colors.border,
+    marginBottom: 16,
+  },
+  weightTableHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#1F2937',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  weightTableHeaderText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: '#F9FAFB',
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+  },
+  weightTableRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: Colors.surface,
+  },
+  weightTableRowAlt: {
+    backgroundColor: Colors.background,
+  },
+  weightTableGroup: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  weightTableLimit: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500' as const,
+    color: '#D97706',
+  },
+  rulesDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginBottom: 16,
+  },
+  rulesOptionsSection: {
+    marginBottom: 16,
+  },
+  rulesOptionsTitle: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  rulesOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  rulesOptionIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  rulesOptionLabel: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  rulesOptionDesc: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 1,
+  },
+  rulesNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#FFFBEB',
+    borderRadius: 8,
+    padding: 10,
+    gap: 8,
+  },
+  rulesNoteText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#92400E',
+    lineHeight: 17,
   },
 });
