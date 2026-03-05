@@ -2,7 +2,7 @@
   "expo": {
     "name": "Utah Little Rugby",
     "slug": "utah-little-rugby",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "utah-little-rugby",
