@@ -146,7 +146,7 @@ export const sheetsRouter = createTRPCRouter({
       console.log("Fetching players from sheet:", input.sheetName);
       try {
         const sheets = getGoogleSheetsClient();
-        const range = `${input.sheetName}!A2:P`;
+        const range = `${input.sheetName}!A2:Q`;
         
         const response = await sheets.spreadsheets.values.get({
           spreadsheetId: input.spreadsheetId,
@@ -345,7 +345,7 @@ export const sheetsRouter = createTRPCRouter({
           throw new Error(`Player with ID ${input.player.id} not found`);
         }
 
-        const range = `${input.sheetName}!A${rowIndex}:P${rowIndex}`;
+        const range = `${input.sheetName}!A${rowIndex}:Q${rowIndex}`;
         const values = [playerToRow(input.player)];
 
         await sheets.spreadsheets.values.update({
@@ -384,7 +384,7 @@ export const sheetsRouter = createTRPCRouter({
 
         await sheets.spreadsheets.values.append({
           spreadsheetId: input.spreadsheetId,
-          range: `${input.sheetName}!A:P`,
+          range: `${input.sheetName}!A:Q`,
           valueInputOption: "RAW",
           insertDataOption: "INSERT_ROWS",
           requestBody: { values },

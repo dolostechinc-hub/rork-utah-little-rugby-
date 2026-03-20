@@ -120,7 +120,7 @@ export default function PlayerDetailScreen() {
 
   const handleToggleVerified = () => {
     if (Platform.OS !== 'web') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
     setIsAgeVerified(!isAgeVerified);
     
@@ -144,10 +144,12 @@ export default function PlayerDetailScreen() {
       setPhotoUri(result.assets[0].uri);
       
       if (Platform.OS !== 'web') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
     }
   };
+
+  const [isUploading, setIsUploading] = useState(false);
 
   const handleSave = async () => {
     const missingFields: string[] = [];
@@ -177,13 +179,34 @@ export default function PlayerDetailScreen() {
     
     if (photoUri && !photoUri.startsWith('http')) {
       console.log('Uploading photo to cloud storage...');
-      const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, 'utah-little-rugby');
-      if (uploadedUrl) {
-        console.log('Photo uploaded successfully:', uploadedUrl);
-        finalPhotoUri = uploadedUrl;
-      } else {
-        console.warn('Photo upload failed, saving without cloud URL');
+      setIsUploading(true);
+      try {
+        const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, 'utah-little-rugby');
+        if (uploadedUrl) {
+          console.log('Photo uploaded to cloud successfully:', uploadedUrl);
+          finalPhotoUri = uploadedUrl;
+          setPhotoUri(uploadedUrl);
+        } else {
+          console.error('Photo cloud upload returned null');
+          setIsUploading(false);
+          Alert.alert(
+            'Photo Upload Failed',
+            'Could not upload the photo to cloud storage. Photos must be stored in the cloud so all devices can access them. Please check your internet connection and try again.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      } catch (uploadError) {
+        console.error('Photo cloud upload error:', uploadError);
+        setIsUploading(false);
+        Alert.alert(
+          'Photo Upload Failed',
+          'Could not upload the photo to cloud storage. Please check your internet connection and try again.',
+          [{ text: 'OK' }]
+        );
+        return;
       }
+      setIsUploading(false);
     }
     
     const checkedIn = true;
@@ -203,22 +226,22 @@ export default function PlayerDetailScreen() {
         calculatedAgeGroup: calculatedAgeGroup || undefined,
       });
 
-      console.log('Player check-in saved successfully');
+      console.log('Player check-in saved and synced successfully');
 
       if (Platform.OS !== 'web') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
 
       Alert.alert(
         'Check-In Complete',
-        `${player.firstName} ${player.lastName} has been verified and checked in.`,
+        `${player.firstName} ${player.lastName} has been verified and checked in. Data synced to Google Sheets.`,
         [{ text: 'OK', onPress: () => router.back() }]
       );
     } catch (error) {
       console.error('Failed to save player check-in:', error);
       Alert.alert(
-        'Save Failed',
-        'There was an error saving the check-in. Please try again.',
+        'Sync Failed',
+        'The check-in data could not be synced to Google Sheets. Please check your connection and try again.',
         [{ text: 'OK' }]
       );
     }
@@ -414,12 +437,12 @@ export default function PlayerDetailScreen() {
           <TouchableOpacity
             style={[styles.saveButton, isComplete && styles.saveButtonComplete]}
             onPress={handleSave}
-            disabled={isUpdating}
+            disabled={isUpdating || isUploading}
             activeOpacity={0.8}
           >
             <Save size={22} color={Colors.white} />
             <Text style={styles.saveButtonText}>
-              {isUpdating ? 'Saving...' : isComplete ? 'Complete Check-In' : 'Complete Required Fields'}
+              {isUploading ? 'Uploading Photo...' : isUpdating ? 'Syncing...' : isComplete ? 'Complete Check-In' : 'Complete Required Fields'}
             </Text>
           </TouchableOpacity>
         ) : (

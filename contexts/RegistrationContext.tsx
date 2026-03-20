@@ -6,7 +6,7 @@ import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } 
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
 
-const SYNC_INTERVAL = 30000; // Sync every 30 seconds
+const SYNC_INTERVAL = 15000; // Sync every 15 seconds for near-real-time updates
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
 
@@ -39,6 +39,7 @@ function generateSheetAccessCode(): string {
 
 export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const queryClient = useQueryClient();
+  // eslint-disable-next-line rork/general-context-optimization
   const trpcUtils = trpc.useUtils();
   const [filters, setFilters] = useState<RegistrationFilters>({
     club: null,
@@ -99,7 +100,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         setIsLoadingConfig(false);
       }
     };
-    loadConfig();
+    void loadConfig();
   }, []);
 
   const sheetsPlayersQuery = trpc.sheets.getPlayers.useQuery(
@@ -109,7 +110,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     },
     { 
       enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 15000,
+      staleTime: 10000,
       refetchInterval: SYNC_INTERVAL,
       retry: RETRY_COUNT,
       retryDelay: (attemptIndex) => Math.min(RETRY_DELAY * Math.pow(2, attemptIndex), 10000),
@@ -146,26 +147,25 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
   const updateSheetsMutation = trpc.sheets.updatePlayer.useMutation({
     onSuccess: (data) => {
-      console.log('Player update successful, synced to Google Sheets:', data.player.id);
-      trpcUtils.sheets.getPlayers.invalidate();
+      console.log('Player update synced to Google Sheets:', data.player.id);
+      void trpcUtils.sheets.getPlayers.invalidate();
     },
     onError: (error) => {
-      console.error('Failed to update player in Google Sheets:', error);
-      // Refetch to ensure we have latest data after error
-      trpcUtils.sheets.getPlayers.invalidate();
+      console.error('Failed to sync player update to Google Sheets:', error);
+      void trpcUtils.sheets.getPlayers.invalidate();
     },
-    retry: 2,
+    retry: 3,
   });
 
   const addSheetsMutation = trpc.sheets.addPlayer.useMutation({
     onSuccess: (data) => {
-      console.log('Player added successfully to Google Sheets:', data.player.id);
-      trpcUtils.sheets.getPlayers.invalidate();
+      console.log('Player added and synced to Google Sheets:', data.player.id);
+      void trpcUtils.sheets.getPlayers.invalidate();
     },
     onError: (error) => {
-      console.error('Failed to add player to Google Sheets:', error);
+      console.error('Failed to sync new player to Google Sheets:', error);
     },
-    retry: 2,
+    retry: 3,
   });
 
   const updateLocalMutation = useMutation({
@@ -208,7 +208,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     onSuccess: (newPlayers) => {
       console.log('Update mutation success, refreshing query cache');
       queryClient.setQueryData(['local-players'], newPlayers);
-      queryClient.invalidateQueries({ queryKey: ['local-players'] });
+      void queryClient.invalidateQueries({ queryKey: ['local-players'] });
     },
   });
 
@@ -358,7 +358,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     onSuccess: (allPlayers) => {
       console.log('Import success with deduplication, total players:', allPlayers.length);
       queryClient.setQueryData(['local-players'], allPlayers);
-      queryClient.invalidateQueries({ queryKey: ['local-players'] });
+      void queryClient.invalidateQueries({ queryKey: ['local-players'] });
     },
   });
 
@@ -392,7 +392,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       setImportedTeams([]);
       setImportedAgeGroups([]);
       setImportedDivisions([]);
-      queryClient.invalidateQueries({ queryKey: ['local-players'] });
+      void queryClient.invalidateQueries({ queryKey: ['local-players'] });
       console.log('All imported data cleared successfully');
     },
   });
@@ -538,7 +538,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     console.log('Disconnecting from Google Sheets');
     await AsyncStorage.removeItem(SHEETS_CONFIG_KEY);
     setSheetsConfig(null);
-    queryClient.invalidateQueries({ queryKey: ['local-players'] });
+    void queryClient.invalidateQueries({ queryKey: ['local-players'] });
   }, [queryClient]);
 
   const isConnected = sheetsConfig?.isConnected || false;
@@ -711,12 +711,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
   const updatePlayer = useCallback(async (player: Player): Promise<void> => {
     if (isConnected && sheetsConfig) {
+      console.log('Syncing player update to Google Sheets:', player.id, 'photoUri:', player.photoUri ? 'has photo' : 'no photo');
       await updateSheetsPlayerAsync({
         spreadsheetId: sheetsConfig.spreadsheetId,
         sheetName: sheetsConfig.sheetName,
         player,
       });
     } else {
+      console.log('Saving player update locally:', player.id);
       await updateLocalPlayerAsync(player);
     }
   }, [isConnected, sheetsConfig, updateSheetsPlayerAsync, updateLocalPlayerAsync]);
@@ -836,7 +838,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     
     await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(resultPlayers));
     queryClient.setQueryData(['local-players'], resultPlayers);
-    queryClient.invalidateQueries({ queryKey: ['local-players'] });
+    void queryClient.invalidateQueries({ queryKey: ['local-players'] });
 
     return {
       imported: newPlayersAdded,
@@ -848,10 +850,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const refreshData = useCallback(() => {
     console.log('Refreshing data, isConnected:', isConnected);
     if (isConnected) {
-      trpcUtils.sheets.getPlayers.invalidate();
-      trpcUtils.sheets.getMetadata.invalidate();
+      void trpcUtils.sheets.getPlayers.invalidate();
+      void trpcUtils.sheets.getMetadata.invalidate();
     } else {
-      queryClient.invalidateQueries({ queryKey: ['local-players'] });
+      void queryClient.invalidateQueries({ queryKey: ['local-players'] });
     }
   }, [isConnected, queryClient, trpcUtils]);
 
@@ -864,8 +866,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const isFetching = sheetsPlayersQuery.isFetching;
   const hasError = sheetsPlayersQuery.isError || sheetsMetadataQuery.isError;
   const lastSyncTime = sheetsPlayersQuery.dataUpdatedAt;
+  const connectionError = sheetsPlayersQuery.error?.message || sheetsMetadataQuery.error?.message || null;
+  const updateError = updateSheetsMutation.error?.message || null;
 
-  return {
+  return useMemo(() => ({
     players,
     filteredPlayers,
     filters,
@@ -896,11 +900,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     disconnectFromSheets,
     refreshData,
     isConnecting: isTestingConnection,
-    connectionError: sheetsPlayersQuery.error?.message || sheetsMetadataQuery.error?.message || null,
+    connectionError,
     isFetching,
     hasError,
     lastSyncTime,
-    updateError: updateSheetsMutation.error?.message || null,
+    updateError,
     savedSheetInfo,
     saveSheetInfo,
     enableWriteBack,
@@ -912,7 +916,18 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     getSheetByAccessCode,
     toggleSheetLock,
     toggleSheetEditing,
-  };
+  }), [
+    players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
+    updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
+    resetDataMutation.mutate, clearAllImportedDataMutation.mutateAsync,
+    clearAllImportedDataMutation.isPending, importMetadataMutation.mutateAsync,
+    isLoading, getPlayerById, stats, isUpdating, isAdding, isImporting,
+    isConnected, sheetsConfig, connectToSheets, disconnectFromSheets, refreshData,
+    isTestingConnection, connectionError, isFetching, hasError, lastSyncTime,
+    updateError, savedSheetInfo, saveSheetInfo, enableWriteBack, disableWriteBack,
+    importedSheets, addImportedSheet, updateImportedSheet, deleteImportedSheet,
+    getSheetByAccessCode, toggleSheetLock, toggleSheetEditing,
+  ]);
 });
 
 export function usePlayer(id: string) {
