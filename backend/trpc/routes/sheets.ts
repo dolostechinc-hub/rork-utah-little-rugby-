@@ -323,44 +323,91 @@ export const sheetsRouter = createTRPCRouter({
       player: PlayerSchema,
     }))
     .mutation(async ({ input }) => {
-      console.log("Updating player:", input.player.id);
-      try {
-        const sheets = getGoogleSheetsClient();
-        
-        const getResponse = await sheets.spreadsheets.values.get({
-          spreadsheetId: input.spreadsheetId,
-          range: `${input.sheetName}!A:A`,
-        });
+      console.log("Updating player:", input.player.id, "at", new Date().toISOString());
+      const maxRetries = 3;
+      let lastError: Error | null = null;
 
-        const ids = getResponse.data.values || [];
-        let rowIndex = -1;
-        for (let i = 1; i < ids.length; i++) {
-          if (ids[i]?.[0] === input.player.id) {
-            rowIndex = i + 1;
-            break;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const sheets = getGoogleSheetsClient();
+          
+          const getResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: input.spreadsheetId,
+            range: `${input.sheetName}!A:A`,
+          });
+
+          const ids = getResponse.data.values || [];
+          let rowIndex = -1;
+          for (let i = 1; i < ids.length; i++) {
+            if (ids[i]?.[0] === input.player.id) {
+              rowIndex = i + 1;
+              break;
+            }
+          }
+
+          if (rowIndex === -1) {
+            console.log("Player not found by ID, trying name+DOB match...");
+            const allDataResponse = await sheets.spreadsheets.values.get({
+              spreadsheetId: input.spreadsheetId,
+              range: `${input.sheetName}!A2:Q`,
+            });
+            const allRows = allDataResponse.data.values || [];
+            for (let i = 0; i < allRows.length; i++) {
+              const row = allRows[i] as string[];
+              const firstName = (row[1] || "").toLowerCase().trim();
+              const lastName = (row[2] || "").toLowerCase().trim();
+              const dob = (row[7] || "").trim();
+              if (
+                firstName === input.player.firstName.toLowerCase().trim() &&
+                lastName === input.player.lastName.toLowerCase().trim() &&
+                dob === input.player.dateOfBirth.trim()
+              ) {
+                rowIndex = i + 2;
+                console.log("Found player by name+DOB match at row:", rowIndex);
+                break;
+              }
+            }
+          }
+
+          if (rowIndex === -1) {
+            console.log("Player not found, appending as new row");
+            const values = [playerToRow(input.player)];
+            await sheets.spreadsheets.values.append({
+              spreadsheetId: input.spreadsheetId,
+              range: `${input.sheetName}!A:Q`,
+              valueInputOption: "RAW",
+              insertDataOption: "INSERT_ROWS",
+              requestBody: { values },
+            });
+            console.log("Player appended as new row successfully");
+            return { success: true, player: input.player };
+          }
+
+          const range = `${input.sheetName}!A${rowIndex}:Q${rowIndex}`;
+          const values = [playerToRow(input.player)];
+
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: input.spreadsheetId,
+            range,
+            valueInputOption: "RAW",
+            requestBody: { values },
+          });
+
+          console.log("Player updated successfully at row:", rowIndex);
+          return { success: true, player: input.player };
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          console.error(`Update attempt ${attempt + 1}/${maxRetries} failed:`, lastError.message);
+          if (attempt < maxRetries - 1) {
+            const delay = Math.min(500 * Math.pow(2, attempt), 4000);
+            console.log(`Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
           }
         }
-
-        if (rowIndex === -1) {
-          throw new Error(`Player with ID ${input.player.id} not found`);
-        }
-
-        const range = `${input.sheetName}!A${rowIndex}:Q${rowIndex}`;
-        const values = [playerToRow(input.player)];
-
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: input.spreadsheetId,
-          range,
-          valueInputOption: "RAW",
-          requestBody: { values },
-        });
-
-        console.log("Player updated successfully");
-        return { success: true, player: input.player };
-      } catch (error) {
-        console.error("Failed to update player:", error);
-        throw new Error("Failed to update player in spreadsheet");
       }
+
+      console.error("All update attempts failed for player:", input.player.id);
+      throw new Error(`Failed to update player after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
     }),
 
   addPlayer: publicProcedure
@@ -370,32 +417,73 @@ export const sheetsRouter = createTRPCRouter({
       player: PlayerSchema.omit({ id: true }),
     }))
     .mutation(async ({ input }) => {
-      console.log("Adding new player:", input.player.firstName, input.player.lastName);
-      try {
-        const sheets = getGoogleSheetsClient();
-        
-        const newId = `player-${Date.now()}`;
-        const newPlayer: Player = {
-          ...input.player,
-          id: newId,
-        };
+      console.log("Adding new player:", input.player.firstName, input.player.lastName, "at", new Date().toISOString());
+      const maxRetries = 3;
+      let lastError: Error | null = null;
 
-        const values = [playerToRow(newPlayer)];
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const sheets = getGoogleSheetsClient();
 
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: input.spreadsheetId,
-          range: `${input.sheetName}!A:Q`,
-          valueInputOption: "RAW",
-          insertDataOption: "INSERT_ROWS",
-          requestBody: { values },
-        });
+          const existingResponse = await sheets.spreadsheets.values.get({
+            spreadsheetId: input.spreadsheetId,
+            range: `${input.sheetName}!A2:Q`,
+          });
+          const existingRows = existingResponse.data.values || [];
+          const duplicate = existingRows.find((row: string[]) => {
+            const firstName = (row[1] || "").toLowerCase().trim();
+            const lastName = (row[2] || "").toLowerCase().trim();
+            const dob = (row[7] || "").trim();
+            return (
+              firstName === input.player.firstName.toLowerCase().trim() &&
+              lastName === input.player.lastName.toLowerCase().trim() &&
+              dob === input.player.dateOfBirth.trim()
+            );
+          });
 
-        console.log("Player added successfully with ID:", newId);
-        return { success: true, player: newPlayer };
-      } catch (error) {
-        console.error("Failed to add player:", error);
-        throw new Error("Failed to add player to spreadsheet");
+          if (duplicate) {
+            console.log("Duplicate player found, updating instead of adding");
+            const existingId = duplicate[0] || `player-${Date.now()}`;
+            const updatedPlayer: Player = { ...input.player, id: existingId };
+            const rowIdx = existingRows.indexOf(duplicate) + 2;
+            await sheets.spreadsheets.values.update({
+              spreadsheetId: input.spreadsheetId,
+              range: `${input.sheetName}!A${rowIdx}:Q${rowIdx}`,
+              valueInputOption: "RAW",
+              requestBody: { values: [playerToRow(updatedPlayer)] },
+            });
+            return { success: true, player: updatedPlayer };
+          }
+
+          const newId = `player-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+          const newPlayer: Player = {
+            ...input.player,
+            id: newId,
+          };
+
+          const values = [playerToRow(newPlayer)];
+
+          await sheets.spreadsheets.values.append({
+            spreadsheetId: input.spreadsheetId,
+            range: `${input.sheetName}!A:Q`,
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
+            requestBody: { values },
+          });
+
+          console.log("Player added successfully with ID:", newId);
+          return { success: true, player: newPlayer };
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          console.error(`Add attempt ${attempt + 1}/${maxRetries} failed:`, lastError.message);
+          if (attempt < maxRetries - 1) {
+            const delay = Math.min(500 * Math.pow(2, attempt), 4000);
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
+        }
       }
+
+      throw new Error(`Failed to add player after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
     }),
 
   getSheetData: publicProcedure

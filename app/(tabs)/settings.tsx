@@ -56,7 +56,7 @@ import {
 import { ParsedPlayer } from '@/components/CSVImportModal';
 import { useRouter } from 'expo-router';
 import { Linking } from 'react-native';
-import { WEIGHT_LIMITS } from '@/utils/playerUtils';
+import { WEIGHT_LIMITS as _WEIGHT_LIMITS } from '@/utils/playerUtils';
 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRegistration } from '@/contexts/RegistrationContext';
@@ -86,12 +86,15 @@ export default function SettingsScreen() {
     savedSheetInfo,
     saveSheetInfo,
     enableWriteBack,
-    disableWriteBack,
+    disableWriteBack: _disableWriteBack,
     importedSheets,
     addImportedSheet,
     toggleSheetLock,
     toggleSheetEditing,
     deleteImportedSheet,
+    pendingWriteCount,
+    syncErrors,
+    processPendingWrites,
   } = useRegistration();
 
   const [showConnectModal, setShowConnectModal] = useState(false);
@@ -138,7 +141,7 @@ export default function SettingsScreen() {
     createOrg,
     joinOrgByCode,
     selectOrg,
-    isLoading: isOrgLoading,
+    isLoading: _isOrgLoading,
   } = useOrganization();
 
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -382,12 +385,22 @@ export default function SettingsScreen() {
         console.log('Sheet added to history with access code:', importedSheet.accessCode);
       }
       
+      if (spreadsheetId) {
+        try {
+          console.log('Auto-enabling write-back sync to Google Sheets...');
+          await enableWriteBack(spreadsheetId, 'Players');
+          console.log('Write-back sync enabled automatically after import');
+        } catch (wbError) {
+          console.warn('Failed to auto-enable write-back:', wbError);
+        }
+      }
+
       refreshData();
       
       setSheetsStep('complete');
       Alert.alert(
         'Import Complete',
-        `Successfully imported ${sheetsParsedPlayers.length} players from Google Sheets.\n\nThis sheet has been saved - you can re-import from it anytime in Settings.`
+        `Successfully imported ${sheetsParsedPlayers.length} players from Google Sheets.\n\nBidirectional sync is now active — any changes (check-ins, photos, weights) will automatically sync back to your Google Sheet.`
       );
     } catch (error) {
       console.error('=== IMPORT ERROR ===');
@@ -618,7 +631,7 @@ export default function SettingsScreen() {
     );
   };
 
-  const handleRevokeEditorSessions = () => {
+  const _handleRevokeEditorSessions = () => {
     Alert.alert(
       'Revoke All Editor Sessions',
       'This will log out all editors. They will need to re-enter the editor PIN to regain access. Continue?',
@@ -948,7 +961,7 @@ export default function SettingsScreen() {
                         'Write-Back Enabled',
                         'Changes you make (check-ins, weights, photos) will now sync to your Google Sheet.\n\nNote: The sheet must be shared with the service account for this to work.'
                       );
-                    } catch (error) {
+                    } catch {
                       Alert.alert('Error', 'Failed to enable write-back. Please try again.');
                     }
                   }}
@@ -1047,6 +1060,29 @@ export default function SettingsScreen() {
             <Text style={styles.statusNote}>
               {stats.checkedIn} checked in this week
             </Text>
+            {pendingWriteCount > 0 && (
+              <View style={styles.pendingSyncRow}>
+                <ActivityIndicator size={14} color="#F59E0B" />
+                <Text style={styles.pendingSyncText}>
+                  {pendingWriteCount} change{pendingWriteCount !== 1 ? 's' : ''} waiting to sync
+                </Text>
+                <TouchableOpacity
+                  onPress={() => void processPendingWrites()}
+                  activeOpacity={0.7}
+                  style={styles.retrySyncButton}
+                >
+                  <Text style={styles.retrySyncText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {syncErrors.length > 0 && (
+              <View style={styles.syncErrorRow}>
+                <XCircle size={14} color={Colors.error} />
+                <Text style={styles.syncErrorText} numberOfLines={2}>
+                  {syncErrors[syncErrors.length - 1]}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
       )}
@@ -3638,5 +3674,42 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#92400E',
     lineHeight: 17,
+  },
+  pendingSyncRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    gap: 8,
+  },
+  pendingSyncText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#F59E0B',
+    fontWeight: '500' as const,
+  },
+  retrySyncButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 6,
+  },
+  retrySyncText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: '#D97706',
+  },
+  syncErrorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 6,
+  },
+  syncErrorText: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.error,
   },
 });

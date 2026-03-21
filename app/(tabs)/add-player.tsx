@@ -102,7 +102,7 @@ export default function AddPlayerScreen() {
 
   const handleToggleVerified = () => {
     if (Platform.OS !== 'web') {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
     setIsAgeVerified(!isAgeVerified);
   };
@@ -125,7 +125,7 @@ export default function AddPlayerScreen() {
       setPhotoUri(result.assets[0].uri);
       
       if (Platform.OS !== 'web') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
     }
   };
@@ -184,12 +184,28 @@ export default function AddPlayerScreen() {
       if (photoUri && !photoUri.startsWith('http')) {
         console.log('Uploading photo to cloud storage...');
         const tempPlayerId = `new-${Date.now()}`;
-        const uploadedUrl = await uploadPlayerPhoto(tempPlayerId, photoUri, 'utah-little-rugby');
-        if (uploadedUrl) {
-          console.log('Photo uploaded successfully:', uploadedUrl);
-          finalPhotoUri = uploadedUrl;
-        } else {
-          console.warn('Photo upload failed, saving without cloud URL');
+        try {
+          const uploadedUrl = await uploadPlayerPhoto(tempPlayerId, photoUri, 'utah-little-rugby');
+          if (uploadedUrl) {
+            console.log('Photo uploaded successfully:', uploadedUrl);
+            finalPhotoUri = uploadedUrl;
+          } else {
+            console.error('Photo upload returned null');
+            Alert.alert(
+              'Photo Upload Failed',
+              'Could not upload the photo to cloud storage. Photos must be stored in the cloud so all devices can see them. Please check your internet connection and try again.',
+              [{ text: 'OK' }]
+            );
+            return;
+          }
+        } catch (uploadError) {
+          console.error('Photo upload error:', uploadError);
+          Alert.alert(
+            'Photo Upload Failed',
+            'Could not upload the photo to cloud storage. Please check your internet connection and try again.',
+            [{ text: 'OK' }]
+          );
+          return;
         }
       }
 
