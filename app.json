@@ -3,7 +3,7 @@
     "owner": "tmcd23",
     "name": "Utah Little Rugby",
     "slug": "utah-little-rugby",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "utah-little-rugby",
@@ -17,6 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.rosterupapp.app",
+      "buildNumber": "1",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Allow $(PRODUCT_NAME) to access your photos to add player profile pictures.",
         "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to access your camera to take player profile pictures.",
