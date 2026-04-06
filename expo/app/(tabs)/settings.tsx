@@ -650,20 +650,33 @@ export default function SettingsScreen() {
       return;
     }
     Alert.alert(
-      'Delete Organization',
-      `Are you sure you want to delete "${orgName}"? This will remove all teams, events, and members. This action cannot be undone.`,
+      'Delete Organization?',
+      `Are you sure you want to delete "${orgName}"?\n\nThis will permanently remove:\n• All teams and events\n• All members and roles\n• Google Sheet connections\n\nYou will need to re-create the organization and re-add your Google Sheet if you change your mind.\n\nThis action cannot be undone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Yes, Delete Organization',
           style: 'destructive',
-          onPress: async () => {
-            const success = await deleteOrg(orgId);
-            if (success) {
-              Alert.alert('Deleted', `"${orgName}" has been deleted.`);
-            } else {
-              Alert.alert('Error', 'Failed to delete organization.');
-            }
+          onPress: () => {
+            Alert.alert(
+              'Final Confirmation',
+              `Type confirm: Are you absolutely sure you want to delete "${orgName}"? All data will be lost and you will need to set everything up again including the Google Sheet.`,
+              [
+                { text: 'No, Keep It', style: 'cancel' },
+                {
+                  text: 'Delete Permanently',
+                  style: 'destructive',
+                  onPress: async () => {
+                    const success = await deleteOrg(orgId);
+                    if (success) {
+                      Alert.alert('Organization Deleted', `"${orgName}" has been permanently deleted. You will need to create a new organization and re-add your Google Sheet to continue.`);
+                    } else {
+                      Alert.alert('Error', 'Failed to delete organization. Please try again.');
+                    }
+                  },
+                },
+              ]
+            );
           },
         },
       ]
