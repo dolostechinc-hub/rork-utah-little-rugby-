@@ -10,6 +10,9 @@ import {
   ActivityIndicator,
   Modal,
   FlatList,
+  KeyboardAvoidingView,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
 import {
   FileSpreadsheet,
@@ -141,8 +144,13 @@ export default function SettingsScreen() {
     createOrg,
     joinOrgByCode,
     selectOrg,
+    deleteOrg,
+    members,
     isLoading: _isOrgLoading,
   } = useOrganization();
+
+  const { width: windowWidth } = useWindowDimensions();
+  const _isLandscape = windowWidth > 600;
 
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showChangePinModal, setShowChangePinModal] = useState(false);
@@ -155,6 +163,7 @@ export default function SettingsScreen() {
   const [showPrivacyPolicy, setShowPrivacyPolicy] = useState(false);
   const [showTermsOfService, setShowTermsOfService] = useState(false);
   const [showImportedSheetsModal, setShowImportedSheetsModal] = useState(false);
+  const [showMyOrgsModal, setShowMyOrgsModal] = useState(false);
   const [orgError, setOrgError] = useState<string | null>(null);
   const [pinInput, setPinInput] = useState('');
   const [currentPinInput, setCurrentPinInput] = useState('');
@@ -631,6 +640,36 @@ export default function SettingsScreen() {
     );
   };
 
+  const handleDeleteOrg = (orgId: string, orgName: string) => {
+    const orgMembers = members.filter(m => m.orgId === orgId);
+    const isOwnerOrAdmin = orgMembers.some(
+      m => (m.role === 'owner' || m.role === 'admin') && m.userId.startsWith('owner-')
+    );
+    if (!isOwnerOrAdmin && !isAdmin) {
+      Alert.alert('Permission Denied', 'Only the organization admin can delete this organization.');
+      return;
+    }
+    Alert.alert(
+      'Delete Organization',
+      `Are you sure you want to delete "${orgName}"? This will remove all teams, events, and members. This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const success = await deleteOrg(orgId);
+            if (success) {
+              Alert.alert('Deleted', `"${orgName}" has been deleted.`);
+            } else {
+              Alert.alert('Error', 'Failed to delete organization.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const _handleRevokeEditorSessions = () => {
     Alert.alert(
       'Revoke All Editor Sessions',
@@ -680,6 +719,18 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Organization</Text>
         
+        {organizations.length > 0 && (
+          <TouchableOpacity
+            style={styles.myOrgsButton}
+            onPress={() => setShowMyOrgsModal(true)}
+            activeOpacity={0.7}
+          >
+            <Building2 size={18} color={Colors.primary} />
+            <Text style={styles.myOrgsButtonText}>My Organizations ({organizations.length})</Text>
+            <ChevronRight size={18} color={Colors.textMuted} />
+          </TouchableOpacity>
+        )}
+
         {currentOrg ? (
           <View style={styles.orgCard}>
             <View style={styles.orgHeader}>
@@ -1594,7 +1645,10 @@ export default function SettingsScreen() {
           setPinError(null);
         }}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Enter Access PIN</Text>
@@ -1658,7 +1712,7 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1672,7 +1726,10 @@ export default function SettingsScreen() {
           setPinError(null);
         }}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Change Admin PIN</Text>
@@ -1739,7 +1796,7 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1753,7 +1810,10 @@ export default function SettingsScreen() {
           setPinError(null);
         }}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
@@ -1824,7 +1884,7 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1837,7 +1897,10 @@ export default function SettingsScreen() {
           setPinError(null);
         }}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Disable Editor Access</Text>
@@ -1889,7 +1952,7 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1902,7 +1965,19 @@ export default function SettingsScreen() {
           setOrgError(null);
         }}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlayDismiss}
+            activeOpacity={1}
+            onPress={() => {
+              setShowJoinOrgModal(false);
+              setOrgCodeInput('');
+              setOrgError(null);
+            }}
+          />
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Join Organization</Text>
@@ -1928,6 +2003,7 @@ export default function SettingsScreen() {
                 onChangeText={(text) => setOrgCodeInput(text.toUpperCase())}
                 autoCapitalize="characters"
                 maxLength={6}
+                autoFocus
               />
             </View>
 
@@ -1953,7 +2029,7 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal
@@ -1966,7 +2042,19 @@ export default function SettingsScreen() {
           setOrgError(null);
         }}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlayDismiss}
+            activeOpacity={1}
+            onPress={() => {
+              setShowCreateOrgModal(false);
+              setNewOrgName('');
+              setOrgError(null);
+            }}
+          />
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Create Organization</Text>
@@ -1990,6 +2078,7 @@ export default function SettingsScreen() {
                 placeholderTextColor={Colors.textMuted}
                 value={newOrgName}
                 onChangeText={setNewOrgName}
+                autoFocus
               />
             </View>
 
@@ -2015,6 +2104,110 @@ export default function SettingsScreen() {
               </Text>
             </View>
           </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={showMyOrgsModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowMyOrgsModal(false)}
+      >
+        <View style={styles.sheetsModalContainer}>
+          <View style={styles.sheetsModalHeader}>
+            <TouchableOpacity
+              style={styles.sheetsBackButton}
+              onPress={() => setShowMyOrgsModal(false)}
+            >
+              <ChevronLeft size={24} color={Colors.text} />
+            </TouchableOpacity>
+            <Text style={styles.sheetsModalHeaderTitle}>My Organizations</Text>
+            <View style={styles.sheetsHeaderSpacer} />
+          </View>
+
+          <ScrollView style={styles.importedSheetsContent} contentContainerStyle={{ paddingBottom: 40 }}>
+            <Text style={styles.importedSheetsDescription}>
+              Organizations you have created or joined. You can only delete organizations where you are the admin/owner.
+            </Text>
+
+            {organizations.map((org) => {
+              const orgMembers = members.filter(m => m.orgId === org.id);
+              const isOrgOwner = orgMembers.some(
+                m => (m.role === 'owner' || m.role === 'admin') && m.userId.startsWith('owner-')
+              );
+              const canDelete = isOrgOwner || isAdmin;
+              const isCurrent = currentOrg?.id === org.id;
+
+              return (
+                <View key={org.id} style={[styles.myOrgCard, isCurrent && styles.myOrgCardActive]}>
+                  <View style={styles.myOrgHeader}>
+                    <View style={[styles.myOrgIcon, { backgroundColor: org.primaryColor + '20' }]}>
+                      <Building2 size={22} color={org.primaryColor} />
+                    </View>
+                    <View style={styles.myOrgInfo}>
+                      <Text style={styles.myOrgName}>{org.name}</Text>
+                      <Text style={styles.myOrgMeta}>
+                        Code: {org.code} • {orgMembers.length} member{orgMembers.length !== 1 ? 's' : ''}
+                      </Text>
+                      {isCurrent && (
+                        <View style={styles.currentBadge}>
+                          <Text style={styles.currentBadgeText}>Current</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+
+                  <View style={styles.myOrgActions}>
+                    {!isCurrent && (
+                      <TouchableOpacity
+                        style={styles.myOrgActionButton}
+                        onPress={() => {
+                          void selectOrg(org.id);
+                          setShowMyOrgsModal(false);
+                          Alert.alert('Switched', `Now using ${org.name}.`);
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <LogIn size={16} color={Colors.primary} />
+                        <Text style={styles.myOrgActionText}>Switch To</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                      style={styles.myOrgCopyButton}
+                      onPress={async () => {
+                        await Clipboard.setStringAsync(org.code);
+                        Alert.alert('Copied!', `Code ${org.code} copied.`);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Copy size={16} color={Colors.primary} />
+                      <Text style={styles.myOrgActionText}>Copy Code</Text>
+                    </TouchableOpacity>
+
+                    {canDelete && (
+                      <TouchableOpacity
+                        style={styles.myOrgDeleteButton}
+                        onPress={() => handleDeleteOrg(org.id, org.name)}
+                        activeOpacity={0.7}
+                      >
+                        <Trash2 size={16} color={Colors.error} />
+                        <Text style={styles.myOrgDeleteText}>Delete</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              );
+            })}
+
+            {organizations.length === 0 && (
+              <View style={styles.emptyOrgsContainer}>
+                <Building2 size={40} color={Colors.textMuted} />
+                <Text style={styles.emptyOrgsTitle}>No Organizations</Text>
+                <Text style={styles.emptyOrgsText}>Create or join an organization to get started.</Text>
+              </View>
+            )}
+          </ScrollView>
         </View>
       </Modal>
 
@@ -3711,5 +3904,134 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     color: Colors.error,
+  },
+  modalOverlayDismiss: {
+    flex: 1,
+  },
+  myOrgsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 10,
+  },
+  myOrgsButtonText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500' as const,
+    color: Colors.primary,
+  },
+  myOrgCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  myOrgCardActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
+  },
+  myOrgHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  myOrgIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  myOrgInfo: {
+    flex: 1,
+  },
+  myOrgName: {
+    fontSize: 17,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginBottom: 2,
+  },
+  myOrgMeta: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  currentBadge: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+    marginTop: 6,
+  },
+  currentBadgeText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    color: Colors.white,
+  },
+  myOrgActions: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  myOrgActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  myOrgActionText: {
+    fontSize: 13,
+    fontWeight: '500' as const,
+    color: Colors.primary,
+  },
+  myOrgCopyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceAlt,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  myOrgDeleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.errorLight,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  myOrgDeleteText: {
+    fontSize: 13,
+    fontWeight: '500' as const,
+    color: Colors.error,
+  },
+  emptyOrgsContainer: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyOrgsTitle: {
+    fontSize: 18,
+    fontWeight: '600' as const,
+    color: Colors.text,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  emptyOrgsText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    textAlign: 'center',
   },
 });

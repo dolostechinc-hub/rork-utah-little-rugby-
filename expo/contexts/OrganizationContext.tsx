@@ -1,7 +1,7 @@
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
   Organization,
@@ -128,7 +128,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
         setIsInitialized(true);
       }
     };
-    loadCurrentSelections();
+    void loadCurrentSelections();
   }, []);
 
   useEffect(() => {
@@ -545,6 +545,66 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     await saveData(newData);
   }, [orgData, saveData]);
 
+  const deleteOrg = useCallback(async (orgId: string): Promise<boolean> => {
+    console.log('Deleting organization:', orgId);
+    const org = orgData.organizations.find(o => o.id === orgId);
+    if (!org) {
+      console.log('Organization not found:', orgId);
+      return false;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('organizations')
+        .delete()
+        .eq('id', orgId);
+      if (error) {
+        console.warn('Failed to delete org from Supabase:', error.message);
+      } else {
+        console.log('Organization deleted from Supabase');
+      }
+    } catch (err) {
+      console.warn('Supabase delete failed:', err);
+    }
+
+    const newData: OrgData = {
+      ...orgData,
+      organizations: orgData.organizations.filter(o => o.id !== orgId),
+      teams: orgData.teams.filter(t => t.orgId !== orgId),
+      events: orgData.events.filter(e => e.orgId !== orgId),
+      eventTeams: orgData.eventTeams.filter(et => {
+        const team = orgData.teams.find(t => t.id === et.teamId);
+        return team?.orgId !== orgId;
+      }),
+      members: orgData.members.filter(m => m.orgId !== orgId),
+      verifications: orgData.verifications.filter(v => {
+        const event = orgData.events.find(e => e.id === v.eventId);
+        return event?.orgId !== orgId;
+      }),
+      checkIns: orgData.checkIns.filter(c => {
+        const event = orgData.events.find(e => e.id === c.eventId);
+        return event?.orgId !== orgId;
+      }),
+      privacySettings: orgData.privacySettings.filter(p => p.orgId !== orgId),
+      verificationPasses: orgData.verificationPasses.filter(p => p.issuingOrgId !== orgId),
+      verificationViews: orgData.verificationViews,
+    };
+
+    await saveData(newData);
+
+    if (currentOrgId === orgId) {
+      const remaining = newData.organizations;
+      if (remaining.length > 0) {
+        await selectOrg(remaining[0].id);
+      } else {
+        await selectOrg(null);
+      }
+    }
+
+    console.log('Organization deleted successfully:', orgId);
+    return true;
+  }, [orgData, saveData, currentOrgId, selectOrg]);
+
   const createEvent = useCallback(async (event: Omit<Event, 'id' | 'createdAt'>): Promise<Event> => {
     console.log('Creating event:', event.name);
     const newEvent: Event = {
@@ -923,11 +983,11 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
 
   useEffect(() => {
     if (isOnline && offlineQueue.length > 0) {
-      syncOfflineCheckIns();
+      void syncOfflineCheckIns();
     }
   }, [isOnline, offlineQueue.length, syncOfflineCheckIns]);
 
-  return {
+  return useMemo(() => ({
     organizations: orgData.organizations,
     teams: orgData.teams,
     events: orgData.events,
@@ -958,6 +1018,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     importTeamsWithOrgCheck,
     updateTeam,
     deleteTeam,
+    deleteOrg,
     createEvent,
     updateEvent,
     deleteEvent,
@@ -979,5 +1040,18 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     checkInPlayer,
     getEventCheckIns,
     syncOfflineCheckIns,
-  };
+  }), [
+    orgData, currentOrg, currentEvent, currentOrgTeams, currentOrgEvents,
+    currentEventTeams, currentEventVerifications, orgDataQuery.isLoading,
+    isInitialized, isSaving, isOnline, offlineQueue.length,
+    selectOrg, selectEvent, createOrg, updateOrg, joinOrgByCode,
+    createTeam, createTeamsBulk, clearOrgTeams, getOrgByName,
+    shouldOverwriteOrgData, importTeamsWithOrgCheck, updateTeam, deleteTeam,
+    deleteOrg, createEvent, updateEvent, deleteEvent, addTeamToEvent,
+    removeTeamFromEvent, createVerification, updateVerification,
+    getMemberRole, updateMemberRole, removeMember, getOrgMembers,
+    getOrgPrivacySettings, updateOrgPrivacySettings, createVerificationPass,
+    revokeVerificationPass, redeemVerificationPass, getVerificationViews,
+    getEventPasses, checkInPlayer, getEventCheckIns, syncOfflineCheckIns,
+  ]);
 });
