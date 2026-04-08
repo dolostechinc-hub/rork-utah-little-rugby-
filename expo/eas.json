@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": ">= 16.28.0",
+    "version": ">= 18.0.0",
     "appVersionSource": "remote"
   },
   "build": {
@@ -21,6 +21,7 @@
   "submit": {
     "production": {
       "ios": {
+        "appleId": "utahsportsrecording@gmail.com",
         "ascAppId": "6759469923",
         "appleTeamId": "Z2BADWBT7S"
       }
