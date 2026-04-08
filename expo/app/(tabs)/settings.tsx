@@ -55,6 +55,7 @@ import {
   Coins,
   ArrowUp,
   Link,
+  Clock,
 } from 'lucide-react-native';
 import { ParsedPlayer } from '@/components/CSVImportModal';
 import { useRouter } from 'expo-router';
@@ -2151,6 +2152,12 @@ export default function SettingsScreen() {
               const canDelete = isOrgOwner || isAdmin;
               const isCurrent = currentOrg?.id === org.id;
 
+              const expiresAt = org.expiresAt ? new Date(org.expiresAt) : null;
+              const now = new Date();
+              const isExpired = expiresAt ? expiresAt < now : false;
+              const daysRemaining = expiresAt ? Math.ceil((expiresAt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null;
+              const isExpiringSoon = daysRemaining !== null && daysRemaining > 0 && daysRemaining <= 14;
+
               return (
                 <View key={org.id} style={[styles.myOrgCard, isCurrent && styles.myOrgCardActive]}>
                   <View style={styles.myOrgHeader}>
@@ -2160,14 +2167,71 @@ export default function SettingsScreen() {
                     <View style={styles.myOrgInfo}>
                       <Text style={styles.myOrgName}>{org.name}</Text>
                       <Text style={styles.myOrgMeta}>
-                        Code: {org.code} • {orgMembers.length} member{orgMembers.length !== 1 ? 's' : ''}
+                        {orgMembers.length} member{orgMembers.length !== 1 ? 's' : ''} • Created {new Date(org.createdAt).toLocaleDateString()}
                       </Text>
-                      {isCurrent && (
-                        <View style={styles.currentBadge}>
-                          <Text style={styles.currentBadgeText}>Current</Text>
+                      <View style={styles.orgBadgeRow}>
+                        {isCurrent && (
+                          <View style={styles.currentBadge}>
+                            <Text style={styles.currentBadgeText}>Current</Text>
+                          </View>
+                        )}
+                        {isExpired ? (
+                          <View style={styles.expiredBadge}>
+                            <Text style={styles.expiredBadgeText}>Expired</Text>
+                          </View>
+                        ) : isExpiringSoon ? (
+                          <View style={styles.expiringSoonBadge}>
+                            <Text style={styles.expiringSoonBadgeText}>{daysRemaining}d left</Text>
+                          </View>
+                        ) : (
+                          <View style={styles.activeBadge}>
+                            <Text style={styles.activeBadgeText}>Active</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.orgShareCodeCard}>
+                    <View style={styles.orgShareCodeHeader}>
+                      <Text style={styles.orgShareCodeLabel}>SHARE CODE</Text>
+                      {expiresAt && !isExpired && (
+                        <View style={styles.orgExpiryRow}>
+                          <Clock size={12} color={isExpiringSoon ? '#D97706' : Colors.textMuted} />
+                          <Text style={[styles.orgExpiryText, isExpiringSoon && styles.orgExpiryTextWarning]}>
+                            Expires {expiresAt.toLocaleDateString()}
+                          </Text>
                         </View>
                       )}
                     </View>
+                    <View style={styles.orgShareCodeValueRow}>
+                      <Text style={[styles.orgShareCodeValue, isExpired && styles.orgShareCodeValueExpired]}>
+                        {org.code}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.orgShareCopyBtn}
+                        onPress={async () => {
+                          await Clipboard.setStringAsync(org.code);
+                          Alert.alert('Copied!', `Code ${org.code} copied to clipboard.`);
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Copy size={16} color={Colors.primary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.orgShareShareBtn}
+                        onPress={() => {
+                          const message = `Join ${org.name} on the Youth Sports Registration app!\n\nOrganization Code: ${org.code}\n\nEnter this code in the app to join our organization.`;
+                          Alert.alert('Share Code', message);
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Share2 size={16} color={Colors.primary} />
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.orgShareCodeHint}>
+                      Share this code with others to let them join this organization
+                    </Text>
                   </View>
 
                   <View style={styles.myOrgActions}>
@@ -2185,18 +2249,6 @@ export default function SettingsScreen() {
                         <Text style={styles.myOrgActionText}>Switch To</Text>
                       </TouchableOpacity>
                     )}
-
-                    <TouchableOpacity
-                      style={styles.myOrgCopyButton}
-                      onPress={async () => {
-                        await Clipboard.setStringAsync(org.code);
-                        Alert.alert('Copied!', `Code ${org.code} copied.`);
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <Copy size={16} color={Colors.primary} />
-                      <Text style={styles.myOrgActionText}>Copy Code</Text>
-                    </TouchableOpacity>
 
                     {canDelete && (
                       <TouchableOpacity
@@ -3975,6 +4027,110 @@ const styles = StyleSheet.create({
   myOrgMeta: {
     fontSize: 13,
     color: Colors.textSecondary,
+  },
+  orgBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+  },
+  expiredBadge: {
+    backgroundColor: Colors.errorLight,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  expiredBadgeText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    color: Colors.error,
+  },
+  expiringSoonBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  expiringSoonBadgeText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    color: '#D97706',
+  },
+  activeBadge: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  activeBadgeText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    color: '#16A34A',
+  },
+  orgShareCodeCard: {
+    backgroundColor: '#F0FDF4',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  orgShareCodeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  orgShareCodeLabel: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: '#16A34A',
+    letterSpacing: 1,
+  },
+  orgExpiryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  orgExpiryText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
+  orgExpiryTextWarning: {
+    color: '#D97706',
+    fontWeight: '500' as const,
+  },
+  orgShareCodeValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  orgShareCodeValue: {
+    fontSize: 26,
+    fontWeight: '800' as const,
+    color: '#15803D',
+    letterSpacing: 5,
+    flex: 1,
+  },
+  orgShareCodeValueExpired: {
+    color: Colors.textMuted,
+    textDecorationLine: 'line-through' as const,
+  },
+  orgShareCopyBtn: {
+    padding: 8,
+    backgroundColor: '#DCFCE7',
+    borderRadius: 8,
+    marginLeft: 6,
+  },
+  orgShareShareBtn: {
+    padding: 8,
+    backgroundColor: '#DCFCE7',
+    borderRadius: 8,
+    marginLeft: 6,
+  },
+  orgShareCodeHint: {
+    fontSize: 11,
+    color: '#4ADE80',
+    marginTop: 6,
   },
   currentBadge: {
     backgroundColor: Colors.primary,

@@ -242,6 +242,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
           logo_uri: null,
           primary_color: primaryColor || '#0B7A4B',
           owner_id: ownerUUID,
+          expires_at: expiresAt.toISOString(),
         })
         .select()
         .single();
@@ -277,6 +278,9 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       console.warn('Organization NOT saved to Supabase - join codes will only work on this device');
     }
     
+    const expiresAt = new Date();
+    expiresAt.setMonth(expiresAt.getMonth() + 4);
+
     const org: Organization = {
       id: orgId,
       name,
@@ -285,6 +289,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       primaryColor: primaryColor || '#0B7A4B',
       createdAt: new Date().toISOString(),
       ownerId: ownerUUID,
+      expiresAt: expiresAt.toISOString(),
     };
 
     const ownerMember: OrgMember = {
@@ -342,6 +347,8 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
         } else if (supabaseOrg) {
           console.log('Found organization in Supabase:', supabaseOrg.name, 'ID:', supabaseOrg.id);
           // Convert Supabase format to local format
+          const fallbackExpiry = new Date(supabaseOrg.created_at);
+          fallbackExpiry.setMonth(fallbackExpiry.getMonth() + 4);
           org = {
             id: supabaseOrg.id,
             name: supabaseOrg.name,
@@ -350,6 +357,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             primaryColor: supabaseOrg.primary_color || '#0B7A4B',
             createdAt: supabaseOrg.created_at,
             ownerId: supabaseOrg.owner_id,
+            expiresAt: supabaseOrg.expires_at || fallbackExpiry.toISOString(),
           };
         } else {
           console.log('No organization found in Supabase with code:', normalizedCode);

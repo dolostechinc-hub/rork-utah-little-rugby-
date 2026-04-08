@@ -58,6 +58,7 @@ export interface Organization {
   primaryColor: string;
   createdAt: string;
   ownerId: string;
+  expiresAt: string;
 }
 
 export interface OrgMember {
