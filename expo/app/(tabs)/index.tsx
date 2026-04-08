@@ -30,6 +30,8 @@ export default function CheckInScreen() {
     divisions,
     isLoading,
     stats,
+    refreshData,
+    isFetching,
   } = useRegistration();
 
   const [refreshing, setRefreshing] = React.useState(false);
@@ -39,8 +41,10 @@ export default function CheckInScreen() {
 
   const onRefresh = React.useCallback(() => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 500);
-  }, []);
+    console.log('Pull-to-refresh triggered on Check-In screen');
+    refreshData();
+    setTimeout(() => setRefreshing(false), 1500);
+  }, [refreshData]);
 
   if (isLoading) {
     return (
