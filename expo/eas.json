@@ -12,10 +12,7 @@
       "distribution": "internal"
     },
     "production": {
-      "autoIncrement": true,
-      "ios": {
-        "appleTeamId": "Z2BADWBT7S"
-      }
+      "autoIncrement": true
     }
   },
   "submit": {
