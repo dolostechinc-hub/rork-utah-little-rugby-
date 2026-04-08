@@ -45,7 +45,7 @@
     "expo-web-browser": "~15.0.10",
     "googleapis": "^170.1.0",
     "hono": "^4.11.4",
-    "lucide-react-native": "^0.475.0",
+    "lucide-react-native": "^1.7.0",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
