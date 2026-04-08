@@ -22,7 +22,7 @@
         "NSPhotoLibraryUsageDescription": "Allow $(PRODUCT_NAME) to access your photos to add player profile pictures.",
         "NSCameraUsageDescription": "Allow $(PRODUCT_NAME) to access your camera to take player profile pictures.",
         "ITSAppUsesNonExemptEncryption": false
-      },
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -54,8 +54,7 @@
         {
           "photosPermission": "The app accesses your photos to add player profile pictures."
         }
-      ],
-      "expo-document-picker"
+      ]
     ],
     "experiments": {
       "typedRoutes": true
