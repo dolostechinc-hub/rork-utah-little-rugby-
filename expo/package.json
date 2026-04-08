@@ -67,7 +67,10 @@
     "typescript": "~5.9.2"
   },
   "overrides": {
-    "expo-location": "~19.0.8"
+    "expo-location": "~19.0.8",
+    "lucide-react-native": {
+      "react": "$react"
+    }
   },
   "private": true
 }
