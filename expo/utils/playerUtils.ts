@@ -15,8 +15,6 @@ export const WEIGHT_LIMITS: Record<string, number> = {
   '10U': 120,
   'U12': 140,
   '12U': 140,
-  'U14': 180,
-  '14U': 180,
 };
 
 export function parseDateOfBirth(dob: string): Date | null {

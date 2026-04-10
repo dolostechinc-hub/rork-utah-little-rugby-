@@ -6,11 +6,11 @@ import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } 
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
 
-const SYNC_INTERVAL = 5000; // Sync every 5 seconds for near-real-time with 20+ concurrent users
-const RETRY_COUNT = 5;
-const RETRY_DELAY = 500;
+const SYNC_INTERVAL = 120000; // Poll every 2 minutes - use pull-to-refresh for immediate updates
+const RETRY_COUNT = 3;
+const RETRY_DELAY = 1000;
 const WRITE_QUEUE_KEY = 'pending_write_queue';
-const LOCAL_SYNC_INTERVAL = 8000; // How often to push local changes to sheets
+const LOCAL_SYNC_INTERVAL = 15000; // How often to push local changes to sheets
 
 const PLAYERS_STORAGE_KEY = 'registration_players';
 const SHEETS_CONFIG_KEY = 'google_sheets_config';
@@ -131,12 +131,12 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     },
     { 
       enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 10000,
+      staleTime: 60000,
       refetchInterval: SYNC_INTERVAL,
       retry: RETRY_COUNT,
       retryDelay: (attemptIndex) => Math.min(RETRY_DELAY * Math.pow(2, attemptIndex), 10000),
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: true,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     }
   );
 
@@ -144,9 +144,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     { spreadsheetId: sheetsConfig?.spreadsheetId || '' },
     { 
       enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 60000,
-      retry: RETRY_COUNT,
-      retryDelay: (attemptIndex) => Math.min(RETRY_DELAY * Math.pow(2, attemptIndex), 10000),
+      staleTime: 300000,
+      retry: 2,
+      retryDelay: (attemptIndex) => Math.min(2000 * Math.pow(2, attemptIndex), 15000),
     }
   );
 
@@ -991,9 +991,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const isAdding = addSheetsMutation.isPending || addLocalMutation.isPending;
   const isImporting = importPlayersMutation.isPending;
   const isFetching = sheetsPlayersQuery.isFetching;
-  const hasError = sheetsPlayersQuery.isError || sheetsMetadataQuery.isError;
+  const hasError = sheetsPlayersQuery.isError;
   const lastSyncTime = sheetsPlayersQuery.dataUpdatedAt;
-  const connectionError = sheetsPlayersQuery.error?.message || sheetsMetadataQuery.error?.message || null;
+  const connectionError = sheetsPlayersQuery.error?.message || null;
+  const metadataError = sheetsMetadataQuery.error?.message || null;
   const updateError = updateSheetsMutation.error?.message || null;
   const pendingWriteCount = pendingWrites.length;
 
@@ -1029,6 +1030,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     refreshData,
     isConnecting: isTestingConnection,
     connectionError,
+    metadataError,
     isFetching,
     hasError,
     lastSyncTime,
@@ -1054,7 +1056,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     clearAllImportedDataMutation.isPending, importMetadataMutation.mutateAsync,
     isLoading, getPlayerById, stats, isUpdating, isAdding, isImporting,
     isConnected, sheetsConfig, connectToSheets, disconnectFromSheets, refreshData,
-    isTestingConnection, connectionError, isFetching, hasError, lastSyncTime,
+    isTestingConnection, connectionError, metadataError, isFetching, hasError, lastSyncTime,
     updateError, savedSheetInfo, saveSheetInfo, enableWriteBack, disableWriteBack,
     importedSheets, addImportedSheet, updateImportedSheet, deleteImportedSheet,
     getSheetByAccessCode, toggleSheetLock, toggleSheetEditing,

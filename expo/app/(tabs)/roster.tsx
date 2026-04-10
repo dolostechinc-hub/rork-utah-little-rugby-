@@ -58,32 +58,20 @@ export default function RosterScreen() {
   const filteredPlayers = useMemo(() => {
     let result = players;
 
-    console.log('Filtering players:', players.length);
-    console.log('Selected club:', selectedClub);
-    console.log('Selected age group:', selectedAgeGroup);
-
     if (selectedClub) {
-      result = result.filter(p => {
-        const matches = p.club === selectedClub;
-        return matches;
-      });
-      console.log('After club filter:', result.length);
+      result = result.filter(p => p.club === selectedClub);
     }
     if (selectedAgeGroup) {
       result = result.filter(p => {
         const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup;
-        const matches = effectiveAgeGroup === selectedAgeGroup;
-        return matches;
+        return effectiveAgeGroup === selectedAgeGroup;
       });
-      console.log('After age group filter:', result.length);
     }
     if (selectedDivision) {
       result = result.filter(p => p.division === selectedDivision);
-      console.log('After division filter:', result.length);
     }
     if (selectedTeamName) {
       result = result.filter(p => p.teamName === selectedTeamName);
-      console.log('After team name filter:', result.length);
     }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();

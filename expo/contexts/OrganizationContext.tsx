@@ -230,7 +230,9 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     console.log('Generated org ID (UUID):', orgId);
     console.log('Generated org code:', orgCode);
     
-    // Try to save to Supabase first
+    const expiresAt = new Date();
+    expiresAt.setMonth(expiresAt.getMonth() + 4);
+    
     let savedToSupabase = false;
     try {
       const { data: supabaseOrg, error } = await supabase
@@ -253,7 +255,6 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
         console.log('Organization saved to Supabase successfully:', supabaseOrg.id);
         savedToSupabase = true;
         
-        // Also save owner member to Supabase
         const { error: memberError } = await supabase
           .from('org_members')
           .insert({
@@ -277,10 +278,6 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     if (!savedToSupabase) {
       console.warn('Organization NOT saved to Supabase - join codes will only work on this device');
     }
-    
-    const expiresAt = new Date();
-    expiresAt.setMonth(expiresAt.getMonth() + 4);
-
     const org: Organization = {
       id: orgId,
       name,
