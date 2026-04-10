@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
+import { Player } from '@/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Search } from 'lucide-react-native';
 import { useRegistration } from '@/contexts/RegistrationContext';
@@ -39,12 +40,18 @@ export default function CheckInScreen() {
   // Use teams from context directly
   const teamNames = teams;
 
-  const onRefresh = React.useCallback(() => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
     console.log('Pull-to-refresh triggered on Check-In screen');
     refreshData();
     setTimeout(() => setRefreshing(false), 1500);
   }, [refreshData]);
+
+  const renderItem = useCallback(({ item }: { item: Player }) => (
+    <PlayerCard player={item} />
+  ), []);
+
+  const keyExtractor = useCallback((item: Player) => item.id, []);
 
   if (isLoading) {
     return (
@@ -125,10 +132,15 @@ export default function CheckInScreen() {
 
         <FlatList
           data={filteredPlayers}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <PlayerCard player={item} />}
+          keyExtractor={keyExtractor}
+          renderItem={renderItem}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          initialNumToRender={15}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={true}
+          updateCellsBatchingPeriod={50}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

@@ -9,7 +9,7 @@ interface PlayerCardProps {
   player: Player;
 }
 
-export default function PlayerCard({ player }: PlayerCardProps) {
+function PlayerCard({ player }: PlayerCardProps) {
   const router = useRouter();
 
   const handlePress = () => {
@@ -69,6 +69,8 @@ export default function PlayerCard({ player }: PlayerCardProps) {
     </TouchableOpacity>
   );
 }
+
+export default React.memo(PlayerCard);
 
 const styles = StyleSheet.create({
   card: {

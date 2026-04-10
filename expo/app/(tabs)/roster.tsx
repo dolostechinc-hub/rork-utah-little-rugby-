@@ -31,6 +31,9 @@ import Colors from '@/constants/colors';
 import { Player, RestrictionStatus } from '@/types';
 import { getRestrictionStatusLabel, getRestrictionStatusColor } from '@/utils/playerUtils';
 
+const ItemSeparator = React.memo(() => <View style={separatorStyle.separator} />);
+const separatorStyle = StyleSheet.create({ separator: { height: 1, backgroundColor: Colors.border, marginLeft: 56 } });
+
 export default function RosterScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -108,6 +111,8 @@ export default function RosterScreen() {
     refreshData();
     setTimeout(() => setRefreshing(false), 1000);
   }, [refreshData]);
+
+  const keyExtractor = useCallback((item: Player) => item.id, []);
 
   const handlePlayerPress = useCallback((player: Player) => {
     router.push(`/player/${player.id}`);
@@ -300,10 +305,16 @@ export default function RosterScreen() {
 
       <FlatList
         data={filteredPlayers}
-        keyExtractor={(item) => item.id}
+        keyExtractor={keyExtractor}
         renderItem={renderPlayerItem}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
+        initialNumToRender={15}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        removeClippedSubviews={true}
+        updateCellsBatchingPeriod={50}
+        ItemSeparatorComponent={ItemSeparator}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -322,7 +333,6 @@ export default function RosterScreen() {
             </Text>
           </View>
         }
-        ItemSeparatorComponent={() => <View style={styles.separator} />}
       />
     </View>
   );
@@ -557,11 +567,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#DBEAFE',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  separator: {
-    height: 1,
-    backgroundColor: Colors.border,
-    marginLeft: 56,
   },
   emptyContainer: {
     alignItems: 'center',

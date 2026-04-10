@@ -17,6 +17,8 @@ const SHEETS_CONFIG_KEY = 'google_sheets_config';
 const SAVED_SHEET_URL_KEY = 'saved_google_sheet_url';
 const IMPORTED_SHEETS_KEY = 'imported_sheets_history';
 
+let memoryPlayerCache: Player[] | null = null;
+
 export interface SheetsConfig {
   spreadsheetId: string;
   sheetName: string;
@@ -157,13 +159,17 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
       if (stored) {
         console.log('Found stored players');
-        return JSON.parse(stored) as Player[];
+        const parsed = JSON.parse(stored) as Player[];
+        memoryPlayerCache = parsed;
+        return parsed;
       }
       console.log('No stored players, returning empty list');
-      // User requested to remove demo data, so we initialize with empty list instead of mocks
+      memoryPlayerCache = [];
       return [];
     },
     enabled: !sheetsConfig?.isConnected,
+    placeholderData: memoryPlayerCache ?? undefined,
+    staleTime: 30000,
   });
 
   const savePendingQueue = useCallback(async (queue: PendingWrite[]) => {
@@ -253,8 +259,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     },
     onSuccess: (newPlayers) => {
       console.log('Update mutation success, refreshing query cache');
+      memoryPlayerCache = newPlayers;
       queryClient.setQueryData(['local-players'], newPlayers);
-      void queryClient.invalidateQueries({ queryKey: ['local-players'] });
     },
   });
 
@@ -274,6 +280,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       return { players: newPlayers, newPlayer: player };
     },
     onSuccess: ({ players }) => {
+      memoryPlayerCache = players;
       queryClient.setQueryData(['local-players'], players);
     },
   });
@@ -403,8 +410,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     },
     onSuccess: (allPlayers) => {
       console.log('Import success with deduplication, total players:', allPlayers.length);
+      memoryPlayerCache = allPlayers;
       queryClient.setQueryData(['local-players'], allPlayers);
-      void queryClient.invalidateQueries({ queryKey: ['local-players'] });
     },
   });
 
@@ -431,6 +438,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       return [];
     },
     onSuccess: () => {
+      memoryPlayerCache = [];
       queryClient.setQueryData(['local-players'], []);
       setSheetsConfig(null);
       setSavedSheetInfo(null);
@@ -904,8 +912,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     console.log('Total players after import:', resultPlayers.length);
     
     await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(resultPlayers));
+    memoryPlayerCache = resultPlayers;
     queryClient.setQueryData(['local-players'], resultPlayers);
-    void queryClient.invalidateQueries({ queryKey: ['local-players'] });
 
     return {
       imported: newPlayersAdded,
