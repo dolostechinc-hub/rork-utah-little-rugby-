@@ -63,6 +63,16 @@ function parseRestrictionStatus(value: string | undefined | null): 'none' | 'pen
   return 'none';
 }
 
+function extractPhotoUrl(cell: string | undefined | null): string | null {
+  if (!cell) return null;
+  const raw = cell.toString().trim();
+  if (!raw) return null;
+  const imageMatch = raw.match(/=IMAGE\(\s*"([^"]+)"/i);
+  if (imageMatch) return imageMatch[1];
+  if (raw.startsWith('http')) return raw;
+  return raw;
+}
+
 function rowToPlayer(row: string[], rowIndex: number): Player {
   return {
     id: row[0] || `row-${rowIndex}`,
@@ -76,7 +86,7 @@ function rowToPlayer(row: string[], rowIndex: number): Player {
     parentName: row[8] || "",
     parentPhone: row[9] || "",
     isAgeVerified: parseBoolean(row[10]),
-    photoUri: row[11] || null,
+    photoUri: extractPhotoUrl(row[11]),
     weight: row[12] || "",
     checkedIn: parseBoolean(row[13]),
     checkedInAt: row[14] || null,
@@ -105,6 +115,30 @@ function playerToRow(player: Player): string[] {
     player.restrictionStatus || "none",
     player.calculatedAgeGroup || "",
   ];
+}
+
+async function writePhotoFormula(
+  sheets: ReturnType<typeof getGoogleSheetsClient>,
+  spreadsheetId: string,
+  sheetName: string,
+  rowIndex: number,
+  photoUri: string | null,
+): Promise<void> {
+  try {
+    const photoCell = `${sheetName}!L${rowIndex}`;
+    const cellValue = photoUri && photoUri.startsWith('http')
+      ? `=IMAGE("${photoUri.replace(/"/g, '\\"')}", 1)`
+      : (photoUri || "");
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: photoCell,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[cellValue]] },
+    });
+    console.log("Photo cell written as IMAGE formula at row:", rowIndex);
+  } catch (err) {
+    console.error("Failed to write photo IMAGE formula:", err);
+  }
 }
 
 // Helper to find column index by header name
@@ -151,6 +185,7 @@ export const sheetsRouter = createTRPCRouter({
         const response = await sheets.spreadsheets.values.get({
           spreadsheetId: input.spreadsheetId,
           range,
+          valueRenderOption: "FORMULA",
         });
 
         const rows = response.data.values || [];
@@ -372,7 +407,7 @@ export const sheetsRouter = createTRPCRouter({
           if (rowIndex === -1) {
             console.log("Player not found, appending as new row");
             const values = [playerToRow(input.player)];
-            await sheets.spreadsheets.values.append({
+            const appendResp = await sheets.spreadsheets.values.append({
               spreadsheetId: input.spreadsheetId,
               range: `${input.sheetName}!A:Q`,
               valueInputOption: "RAW",
@@ -380,6 +415,12 @@ export const sheetsRouter = createTRPCRouter({
               requestBody: { values },
             });
             console.log("Player appended as new row successfully");
+            const updatedRange = appendResp.data.updates?.updatedRange;
+            const match = updatedRange?.match(/!(?:[A-Z]+)(\d+):/);
+            const appendedRow = match ? parseInt(match[1], 10) : -1;
+            if (appendedRow > 0) {
+              await writePhotoFormula(sheets, input.spreadsheetId, input.sheetName, appendedRow, input.player.photoUri);
+            }
             return { success: true, player: input.player };
           }
 
@@ -392,6 +433,8 @@ export const sheetsRouter = createTRPCRouter({
             valueInputOption: "RAW",
             requestBody: { values },
           });
+
+          await writePhotoFormula(sheets, input.spreadsheetId, input.sheetName, rowIndex, input.player.photoUri);
 
           console.log("Player updated successfully at row:", rowIndex);
           return { success: true, player: input.player };
@@ -452,6 +495,7 @@ export const sheetsRouter = createTRPCRouter({
               valueInputOption: "RAW",
               requestBody: { values: [playerToRow(updatedPlayer)] },
             });
+            await writePhotoFormula(sheets, input.spreadsheetId, input.sheetName, rowIdx, updatedPlayer.photoUri);
             return { success: true, player: updatedPlayer };
           }
 
@@ -463,13 +507,20 @@ export const sheetsRouter = createTRPCRouter({
 
           const values = [playerToRow(newPlayer)];
 
-          await sheets.spreadsheets.values.append({
+          const appendResp = await sheets.spreadsheets.values.append({
             spreadsheetId: input.spreadsheetId,
             range: `${input.sheetName}!A:Q`,
             valueInputOption: "RAW",
             insertDataOption: "INSERT_ROWS",
             requestBody: { values },
           });
+
+          const updatedRange = appendResp.data.updates?.updatedRange;
+          const match = updatedRange?.match(/!(?:[A-Z]+)(\d+):/);
+          const appendedRow = match ? parseInt(match[1], 10) : -1;
+          if (appendedRow > 0) {
+            await writePhotoFormula(sheets, input.spreadsheetId, input.sheetName, appendedRow, newPlayer.photoUri);
+          }
 
           console.log("Player added successfully with ID:", newId);
           return { success: true, player: newPlayer };
