@@ -2,6 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import * as FileSystem from 'expo-file-system/legacy';
+import { decode as decodeBase64 } from 'base64-arraybuffer';
 
 const supabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL ??
@@ -48,17 +50,32 @@ export async function uploadPlayerPhoto(
       return photoUri;
     }
 
-    const response = await fetch(photoUri);
-    const blob = await response.blob();
-
     const fileExt = 'jpg';
     const fileName = `${orgId}/${playerId}-${Date.now()}.${fileExt}`;
 
     console.log('Uploading to Supabase Storage:', fileName);
 
+    let uploadBody: ArrayBuffer | Blob;
+
+    if (Platform.OS === 'web') {
+      const response = await fetch(photoUri);
+      uploadBody = await response.blob();
+    } else {
+      console.log('Reading photo as base64 for native upload...');
+      const base64 = await FileSystem.readAsStringAsync(photoUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      if (!base64) {
+        console.error('Failed to read photo file as base64');
+        return null;
+      }
+      uploadBody = decodeBase64(base64);
+      console.log('Photo read, byte length:', (uploadBody as ArrayBuffer).byteLength);
+    }
+
     const { data, error } = await supabase.storage
       .from('player_photos')
-      .upload(fileName, blob, {
+      .upload(fileName, uploadBody, {
         contentType: 'image/jpeg',
         upsert: true,
       });

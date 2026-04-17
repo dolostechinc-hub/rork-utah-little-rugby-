@@ -6,11 +6,10 @@ import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } 
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
 
-const SYNC_INTERVAL = 120000; // Poll every 2 minutes - use pull-to-refresh for immediate updates
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
 const WRITE_QUEUE_KEY = 'pending_write_queue';
-const LOCAL_SYNC_INTERVAL = 15000; // How often to push local changes to sheets
+const LOCAL_SYNC_INTERVAL = 30000; // How often to push local changes to sheets
 
 const PLAYERS_STORAGE_KEY = 'registration_players';
 const SHEETS_CONFIG_KEY = 'google_sheets_config';
@@ -133,12 +132,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     },
     { 
       enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 60000,
-      refetchInterval: SYNC_INTERVAL,
+      staleTime: 5 * 60 * 1000,
+      gcTime: 30 * 60 * 1000,
       retry: RETRY_COUNT,
       retryDelay: (attemptIndex) => Math.min(RETRY_DELAY * Math.pow(2, attemptIndex), 10000),
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
+      refetchOnMount: false,
+      refetchInterval: false,
     }
   );
 
@@ -146,9 +147,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     { spreadsheetId: sheetsConfig?.spreadsheetId || '' },
     { 
       enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 300000,
+      staleTime: 30 * 60 * 1000,
+      gcTime: 60 * 60 * 1000,
       retry: 2,
       retryDelay: (attemptIndex) => Math.min(2000 * Math.pow(2, attemptIndex), 15000),
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+      refetchInterval: false,
     }
   );
 
@@ -197,12 +203,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     onSuccess: (data) => {
       console.log('Player update synced to Google Sheets:', data.player.id);
       setSyncErrors([]);
-      void trpcUtils.sheets.getPlayers.invalidate();
     },
     onError: (error) => {
       console.error('Failed to sync player update to Google Sheets:', error);
       setSyncErrors(prev => [...prev.slice(-4), `Update failed: ${error.message}`]);
-      void trpcUtils.sheets.getPlayers.invalidate();
     },
     retry: 3,
   });
@@ -211,7 +215,6 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     onSuccess: (data) => {
       console.log('Player added and synced to Google Sheets:', data.player.id);
       setSyncErrors([]);
-      void trpcUtils.sheets.getPlayers.invalidate();
     },
     onError: (error) => {
       console.error('Failed to sync new player to Google Sheets:', error);
@@ -768,23 +771,35 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     await updateLocalPlayerAsync(player);
 
     if (isConnected && sheetsConfig) {
-      console.log('Syncing player update to Google Sheets:', player.id);
-      try {
-        await updateSheetsPlayerAsync({
-          spreadsheetId: sheetsConfig.spreadsheetId,
-          sheetName: sheetsConfig.sheetName,
-          player,
-        });
+      const queryKey = [
+        ['sheets', 'getPlayers'],
+        { input: { spreadsheetId: sheetsConfig.spreadsheetId, sheetName: sheetsConfig.sheetName }, type: 'query' },
+      ];
+      queryClient.setQueryData(queryKey, (old: Player[] | undefined) => {
+        if (!old) return old;
+        const exists = old.some(p => p.id === player.id);
+        if (exists) {
+          return old.map(p => p.id === player.id ? player : p);
+        }
+        return [...old, player];
+      });
+
+      console.log('Syncing player update to Google Sheets in background:', player.id);
+      updateSheetsPlayerAsync({
+        spreadsheetId: sheetsConfig.spreadsheetId,
+        sheetName: sheetsConfig.sheetName,
+        player,
+      }).then(() => {
         console.log('Player update synced to Sheets successfully');
-      } catch (error) {
+      }).catch((error) => {
         console.error('Direct Sheets sync failed, queuing for retry:', error);
-        await addToWriteQueue(player, 'update');
-      }
+        void addToWriteQueue(player, 'update');
+      });
     } else if (savedSheetInfo) {
       console.log('Not connected but have saved sheet - queuing write for next sync');
       await addToWriteQueue(player, 'update');
     }
-  }, [isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue]);
+  }, [isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient]);
 
   const { mutateAsync: addSheetsPlayer } = addSheetsMutation;
   const { mutateAsync: addLocalPlayerAsync } = addLocalMutation;
@@ -983,10 +998,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   }, [sheetsConfig?.isConnected, pendingWrites.length, processPendingWrites]);
 
   const refreshData = useCallback(() => {
-    console.log('Refreshing data, isConnected:', isConnected);
+    console.log('Manual refresh triggered, isConnected:', isConnected);
     if (isConnected) {
-      void trpcUtils.sheets.getPlayers.invalidate();
-      void trpcUtils.sheets.getMetadata.invalidate();
+      void trpcUtils.sheets.getPlayers.refetch();
+      void trpcUtils.sheets.getMetadata.refetch();
     } else {
       void queryClient.invalidateQueries({ queryKey: ['local-players'] });
     }
