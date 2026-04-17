@@ -150,6 +150,38 @@ export default function PlayerDetailScreen() {
   };
 
   const [isUploading, setIsUploading] = useState(false);
+  const [isRegisteringWeight, setIsRegisteringWeight] = useState(false);
+  const [weightRegistered, setWeightRegistered] = useState(false);
+
+  const handleWeightBlur = async () => {
+    if (!player) return;
+    const trimmed = weight.trim();
+    if (!trimmed) return;
+    if (trimmed === (player.weight || '').trim()) return;
+    if (showWeightModal) return;
+
+    console.log('Registering weight for player:', player.id, 'weight:', trimmed);
+    setIsRegisteringWeight(true);
+    setWeightRegistered(false);
+    try {
+      await updatePlayer({
+        ...player,
+        weight: trimmed,
+        restrictionStatus,
+        calculatedAgeGroup: calculatedAgeGroup || undefined,
+      });
+      console.log('Weight registered and synced for player:', player.id);
+      setWeightRegistered(true);
+      if (Platform.OS !== 'web') {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      }
+      setTimeout(() => setWeightRegistered(false), 2500);
+    } catch (error) {
+      console.error('Failed to register weight:', error);
+    } finally {
+      setIsRegisteringWeight(false);
+    }
+  };
 
   const handleSave = async () => {
     const missingFields: string[] = [];
@@ -387,11 +419,19 @@ export default function PlayerDetailScreen() {
                 style={styles.weightInput}
                 value={weight}
                 onChangeText={handleWeightChange}
+                onBlur={handleWeightBlur}
                 placeholder="Enter weight"
                 placeholderTextColor={Colors.textMuted}
                 keyboardType="numeric"
                 editable={canEdit}
+                testID="player-weight-input"
               />
+              {isRegisteringWeight && (
+                <Text style={styles.weightStatusText}>Saving…</Text>
+              )}
+              {!isRegisteringWeight && weightRegistered && (
+                <Text style={[styles.weightStatusText, { color: Colors.success }]}>Saved</Text>
+              )}
             </View>
           </View>
 
@@ -663,6 +703,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.textSecondary,
     marginBottom: 4,
+  },
+  weightStatusText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 4,
+    fontWeight: '600' as const,
   },
   weightInput: {
     fontSize: 18,
