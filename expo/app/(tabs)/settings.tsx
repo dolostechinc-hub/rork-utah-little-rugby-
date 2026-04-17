@@ -99,6 +99,8 @@ export default function SettingsScreen() {
     pendingWriteCount,
     syncErrors,
     processPendingWrites,
+    eventMode,
+    setEventMode,
   } = useRegistration();
 
   const [showConnectModal, setShowConnectModal] = useState(false);
@@ -1236,6 +1238,74 @@ export default function SettingsScreen() {
         </View>
       )}
 
+      {canEdit && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Event Mode</Text>
+          <View style={styles.eventModeCard}>
+            <View style={styles.eventModeHeader}>
+              <View style={[styles.eventModeIcon, { backgroundColor: eventMode === 'registration' ? '#DCFCE7' : '#FEF3C7' }]}>
+                {eventMode === 'registration' ? (
+                  <UserPlus size={22} color="#16A34A" />
+                ) : (
+                  <Eye size={22} color="#D97706" />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.eventModeTitle}>
+                  {eventMode === 'registration' ? 'Registration Mode' : 'View-Only Mode'}
+                </Text>
+                <Text style={styles.eventModeSubtitle}>
+                  {eventMode === 'registration'
+                    ? 'Editors can check in players and make changes. Changes sync in the background when saved.'
+                    : 'Everyone views the roster read-only. No writes to Google Sheets. Perfect for game day viewing.'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.eventModeToggleRow}>
+              <TouchableOpacity
+                style={[styles.eventModeButton, eventMode === 'registration' && styles.eventModeButtonActive]}
+                onPress={() => {
+                  if (eventMode !== 'registration') {
+                    Alert.alert(
+                      'Switch to Registration Mode?',
+                      'This will allow check-ins and edits again across all devices using this sheet.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Switch', onPress: () => void setEventMode('registration') },
+                      ]
+                    );
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <UserPlus size={16} color={eventMode === 'registration' ? Colors.white : Colors.textSecondary} />
+                <Text style={[styles.eventModeButtonText, eventMode === 'registration' && styles.eventModeButtonTextActive]}>Registration</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.eventModeButton, eventMode === 'viewOnly' && styles.eventModeButtonActiveView]}
+                onPress={() => {
+                  if (eventMode !== 'viewOnly') {
+                    Alert.alert(
+                      'Lock to View-Only Mode?',
+                      'Nobody will be able to check in or edit players until you switch back. Make sure all registrations are complete.',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Lock', style: 'destructive', onPress: () => void setEventMode('viewOnly') },
+                      ]
+                    );
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <Eye size={16} color={eventMode === 'viewOnly' ? Colors.white : Colors.textSecondary} />
+                <Text style={[styles.eventModeButtonText, eventMode === 'viewOnly' && styles.eventModeButtonTextActive]}>View-Only</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Built-in Rules</Text>
 
@@ -1259,11 +1329,11 @@ export default function SettingsScreen() {
               { group: 'U8', limit: 100 },
               { group: 'U10', limit: 120 },
               { group: 'U12', limit: 140 },
-              { group: 'U14', limit: 180 },
+              { group: 'U14', limit: null as number | null },
             ].map((item, index) => (
               <View key={item.group} style={[styles.weightTableRow, index % 2 === 0 && styles.weightTableRowAlt]}>
                 <Text style={styles.weightTableGroup}>{item.group}</Text>
-                <Text style={styles.weightTableLimit}>{item.limit} lbs</Text>
+                <Text style={styles.weightTableLimit}>{item.limit !== null ? `${item.limit} lbs` : 'No limit'}</Text>
               </View>
             ))}
           </View>
@@ -3969,6 +4039,67 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     color: Colors.error,
+  },
+  eventModeCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  eventModeHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 14,
+  },
+  eventModeIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  eventModeTitle: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  eventModeSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+  },
+  eventModeToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 10,
+    padding: 4,
+    gap: 4,
+  },
+  eventModeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  eventModeButtonActive: {
+    backgroundColor: '#16A34A',
+  },
+  eventModeButtonActiveView: {
+    backgroundColor: '#D97706',
+  },
+  eventModeButtonText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+  },
+  eventModeButtonTextActive: {
+    color: Colors.white,
   },
   modalOverlayDismiss: {
     flex: 1,

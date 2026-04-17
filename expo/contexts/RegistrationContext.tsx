@@ -15,6 +15,9 @@ const PLAYERS_STORAGE_KEY = 'registration_players';
 const SHEETS_CONFIG_KEY = 'google_sheets_config';
 const SAVED_SHEET_URL_KEY = 'saved_google_sheet_url';
 const IMPORTED_SHEETS_KEY = 'imported_sheets_history';
+const EVENT_MODE_KEY = 'event_mode';
+
+export type EventMode = 'registration' | 'viewOnly';
 
 let memoryPlayerCache: Player[] | null = null;
 
@@ -65,6 +68,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const [importedSheets, setImportedSheets] = useState<ImportedSheet[]>([]);
   const [pendingWrites, setPendingWrites] = useState<PendingWrite[]>([]);
   const [syncErrors, setSyncErrors] = useState<string[]>([]);
+  const [eventMode, setEventModeState] = useState<EventMode>('registration');
   
   // Persisted metadata from imports
   const [importedClubs, setImportedClubs] = useState<Club[]>([]);
@@ -78,13 +82,19 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        const [storedConfig, storedMeta, storedSheetInfo, storedImportedSheets, storedQueue] = await Promise.all([
+        const [storedConfig, storedMeta, storedSheetInfo, storedImportedSheets, storedQueue, storedEventMode] = await Promise.all([
           AsyncStorage.getItem(SHEETS_CONFIG_KEY),
           AsyncStorage.getItem('imported_metadata'),
           AsyncStorage.getItem(SAVED_SHEET_URL_KEY),
           AsyncStorage.getItem(IMPORTED_SHEETS_KEY),
           AsyncStorage.getItem(WRITE_QUEUE_KEY),
+          AsyncStorage.getItem(EVENT_MODE_KEY),
         ]);
+
+        if (storedEventMode === 'viewOnly' || storedEventMode === 'registration') {
+          setEventModeState(storedEventMode);
+          console.log('Loaded event mode:', storedEventMode);
+        }
         
         if (storedConfig) {
           console.log('Loaded sheets config from storage');
@@ -767,6 +777,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const { mutateAsync: updateLocalPlayerAsync } = updateLocalMutation;
 
   const updatePlayer = useCallback(async (player: Player): Promise<void> => {
+    if (eventMode === 'viewOnly') {
+      console.log('View-only mode: blocking player update');
+      throw new Error('The app is in View-Only Mode. Switch to Registration Mode in Settings to make changes.');
+    }
     console.log('Saving player update locally first:', player.id, 'photoUri:', player.photoUri ? 'has photo' : 'no photo');
     await updateLocalPlayerAsync(player);
 
@@ -799,12 +813,16 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Not connected but have saved sheet - queuing write for next sync');
       await addToWriteQueue(player, 'update');
     }
-  }, [isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient]);
+  }, [eventMode, isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient]);
 
   const { mutateAsync: addSheetsPlayer } = addSheetsMutation;
   const { mutateAsync: addLocalPlayerAsync } = addLocalMutation;
 
   const addPlayer = useCallback(async (newPlayer: Omit<Player, 'id'>) => {
+    if (eventMode === 'viewOnly') {
+      console.log('View-only mode: blocking add player');
+      throw new Error('The app is in View-Only Mode. Switch to Registration Mode in Settings to add players.');
+    }
     const result = await addLocalPlayerAsync(newPlayer);
     const addedPlayer = result.newPlayer;
     console.log('Player added locally:', addedPlayer.id);
@@ -828,7 +846,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       await addToWriteQueue(addedPlayer, 'add');
     }
     return addedPlayer;
-  }, [isConnected, sheetsConfig, savedSheetInfo, addSheetsPlayer, addLocalPlayerAsync, addToWriteQueue]);
+  }, [eventMode, isConnected, sheetsConfig, savedSheetInfo, addSheetsPlayer, addLocalPlayerAsync, addToWriteQueue]);
+
+  const setEventMode = useCallback(async (mode: EventMode) => {
+    console.log('Setting event mode to:', mode);
+    setEventModeState(mode);
+    await AsyncStorage.setItem(EVENT_MODE_KEY, mode);
+  }, []);
 
   const { mutateAsync: importPlayersAsync } = importPlayersMutation;
 
@@ -1072,6 +1096,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     pendingWriteCount,
     syncErrors,
     processPendingWrites,
+    eventMode,
+    setEventMode,
   }), [
     players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
     updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
@@ -1084,6 +1110,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     importedSheets, addImportedSheet, updateImportedSheet, deleteImportedSheet,
     getSheetByAccessCode, toggleSheetLock, toggleSheetEditing,
     pendingWriteCount, syncErrors, processPendingWrites,
+    eventMode, setEventMode,
   ]);
 });
 
