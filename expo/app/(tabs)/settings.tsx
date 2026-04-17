@@ -138,6 +138,7 @@ export default function SettingsScreen() {
     setEditorPin,
     disableEditorAccess,
     revokeAllEditorSessions,
+    lockEventAndRotateEditorPin,
     editorPinEnabled,
   } = useAuth();
 
@@ -1288,10 +1289,27 @@ export default function SettingsScreen() {
                   if (eventMode !== 'viewOnly') {
                     Alert.alert(
                       'Lock Event to View-Only?',
-                      'Only the admin and users granted edit access (editor PIN) will be able to make changes. Everyone else will be view-only until you switch back. Make sure all registrations are complete.',
+                      'This will immediately revoke edit access from everyone (including current editors). A NEW editor PIN will be generated. You can share this new PIN only with people you trust to make changes.',
                       [
                         { text: 'Cancel', style: 'cancel' },
-                        { text: 'Lock', style: 'destructive', onPress: () => void setEventMode('viewOnly') },
+                        {
+                          text: 'Lock & Rotate PIN',
+                          style: 'destructive',
+                          onPress: async () => {
+                            try {
+                              const newPin = await lockEventAndRotateEditorPin();
+                              await setEventMode('viewOnly');
+                              Alert.alert(
+                                'Event Locked',
+                                `The event is now view-only. All previous editors have been logged out.\n\nNew Editor PIN: ${newPin}\n\nShare this PIN only with people you want to grant edit access to. You can change it anytime in PIN Management.`,
+                                [{ text: 'Got it' }]
+                              );
+                            } catch (err) {
+                              console.error('Failed to lock event:', err);
+                              Alert.alert('Error', 'Failed to lock the event. Please try again.');
+                            }
+                          },
+                        },
                       ]
                     );
                   }

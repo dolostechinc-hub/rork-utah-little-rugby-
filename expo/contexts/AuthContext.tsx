@@ -210,6 +210,26 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     return true;
   }, [adminPin, pinVersion, saveAuthState]);
 
+  const lockEventAndRotateEditorPin = useCallback(async (): Promise<string> => {
+    console.log('Locking event and rotating editor PIN...');
+    const newPin = String(Math.floor(1000 + Math.random() * 9000));
+    const newVersion = pinVersion + 1;
+
+    setEditorPinState(newPin);
+    setEditorPinEnabled(true);
+    setPinVersion(newVersion);
+
+    await Promise.all([
+      AsyncStorage.setItem(EDITOR_PIN_KEY, newPin),
+      AsyncStorage.setItem(AUTH_VERSION_KEY, newVersion.toString()),
+    ]);
+
+    await saveAuthState('admin', newVersion);
+
+    console.log('Editor PIN rotated, all previous editor sessions revoked. New PIN:', newPin);
+    return newPin;
+  }, [pinVersion, saveAuthState]);
+
   const revokeAllEditorSessions = useCallback(async (adminPinVerify: string): Promise<boolean> => {
     if (adminPinVerify !== adminPin) {
       console.log('Admin PIN verification failed');
@@ -247,5 +267,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     setEditorPin,
     disableEditorAccess,
     revokeAllEditorSessions,
+    lockEventAndRotateEditorPin,
   };
 });
