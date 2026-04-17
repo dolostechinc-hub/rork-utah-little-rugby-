@@ -1106,12 +1106,14 @@ export default function SettingsScreen() {
                   <CheckCircle size={24} color="#4CAF50" />
                 )}
                 <Text style={[styles.connectedTitle, hasError && styles.connectedTitleError]}>
-                  {hasError ? 'Connection Issue' : isFetching ? 'Syncing...' : 'Connected to Google Sheets'}
+                  {hasError ? 'Reconnecting…' : isFetching ? 'Syncing...' : 'Connected to Google Sheets'}
                 </Text>
               </View>
               {hasError && connectionError && (
                 <View style={styles.errorBanner}>
-                  <Text style={styles.errorBannerText}>{connectionError}</Text>
+                  <Text style={styles.errorBannerText}>
+                    Temporary issue reaching Google Sheets. We’ll keep retrying automatically and your data stays safe locally.
+                  </Text>
                 </View>
               )}
               <Text style={styles.connectedDetail}>

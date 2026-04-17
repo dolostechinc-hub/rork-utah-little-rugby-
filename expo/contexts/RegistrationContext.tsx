@@ -145,14 +145,16 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     },
     { 
       enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 5 * 60 * 1000,
+      staleTime: 60 * 1000,
       gcTime: 30 * 60 * 1000,
-      retry: RETRY_COUNT,
-      retryDelay: (attemptIndex) => Math.min(RETRY_DELAY * Math.pow(2, attemptIndex), 10000),
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
-      refetchOnMount: false,
-      refetchInterval: false,
+      retry: 5,
+      retryDelay: (attemptIndex) => Math.min(RETRY_DELAY * Math.pow(2, attemptIndex), 15000),
+      refetchOnWindowFocus: true,
+      refetchOnReconnect: true,
+      refetchOnMount: true,
+      refetchInterval: 45_000,
+      refetchIntervalInBackground: false,
+      networkMode: 'online',
     }
   );
 
@@ -160,14 +162,15 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     { spreadsheetId: sheetsConfig?.spreadsheetId || '' },
     { 
       enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 30 * 60 * 1000,
+      staleTime: 10 * 60 * 1000,
       gcTime: 60 * 60 * 1000,
-      retry: 2,
+      retry: 3,
       retryDelay: (attemptIndex) => Math.min(2000 * Math.pow(2, attemptIndex), 15000),
       refetchOnWindowFocus: false,
-      refetchOnReconnect: false,
+      refetchOnReconnect: true,
       refetchOnMount: false,
       refetchInterval: false,
+      networkMode: 'online',
     }
   );
 
@@ -186,10 +189,21 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       memoryPlayerCache = [];
       return [];
     },
-    enabled: !sheetsConfig?.isConnected,
+    enabled: true,
     placeholderData: memoryPlayerCache ?? undefined,
     staleTime: 30000,
   });
+
+  useEffect(() => {
+    if (!isConnected) return;
+    const data = sheetsPlayersQuery.data;
+    if (!data || data.length === 0) return;
+    console.log('Mirroring sheets data to local cache (fallback):', data.length);
+    memoryPlayerCache = data;
+    AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(data)).catch((err) =>
+      console.error('Failed to mirror sheets data to local cache:', err),
+    );
+  }, [sheetsPlayersQuery.data, sheetsConfig?.isConnected]);
 
   const savePendingQueue = useCallback(async (queue: PendingWrite[]) => {
     await AsyncStorage.setItem(WRITE_QUEUE_KEY, JSON.stringify(queue));
@@ -616,6 +630,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const players = useMemo(() => {
     if (isConnected && sheetsPlayersQuery.data) {
       return sheetsPlayersQuery.data;
+    }
+    if (isConnected && localPlayersQuery.data && localPlayersQuery.data.length > 0) {
+      console.log('Using local cache fallback while sheets is unreachable');
+      return localPlayersQuery.data;
     }
     return localPlayersQuery.data || [];
   }, [isConnected, sheetsPlayersQuery.data, localPlayersQuery.data]);
