@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { RegistrationProvider } from '@/contexts/RegistrationContext';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { OrganizationProvider } from '@/contexts/OrganizationContext';
+import { AgeGroupRulesProvider } from '@/contexts/AgeGroupRulesContext';
 import { trpc, trpcClient } from '@/lib/trpc';
 import CustomSplashScreen from '@/components/SplashScreen';
 
@@ -51,7 +52,9 @@ export default function RootLayout() {
           <AuthProvider>
             <OrganizationProvider>
               <RegistrationProvider>
-                <RootLayoutNav />
+                <AgeGroupRulesProvider>
+                  <RootLayoutNav />
+                </AgeGroupRulesProvider>
               </RegistrationProvider>
             </OrganizationProvider>
           </AuthProvider>

@@ -68,6 +68,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useOrganization } from '@/contexts/OrganizationContext';
 import * as Clipboard from 'expo-clipboard';
 import Colors from '@/constants/colors';
+import { useAgeGroupRules, AGE_GROUPS_FOR_RULES } from '@/contexts/AgeGroupRulesContext';
+import { BookOpen, Pencil } from 'lucide-react-native';
 
 export default function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -176,6 +178,57 @@ export default function SettingsScreen() {
   const [adminVerifyPin, setAdminVerifyPin] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
   const [showPin, setShowPin] = useState(false);
+
+  const { links: ruleLinks, setLink: setRuleLink, removeLink: removeRuleLink, isSaving: isSavingRuleLink } = useAgeGroupRules();
+  const [editingRulesGroup, setEditingRulesGroup] = useState<string | null>(null);
+  const [ruleUrlInput, setRuleUrlInput] = useState('');
+  const [ruleUrlError, setRuleUrlError] = useState<string | null>(null);
+
+  const openRulesLink = useCallback(async (url: string, ageGroup: string) => {
+    if (!url) return;
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        Alert.alert('Cannot Open Link', 'This link cannot be opened on your device.');
+        return;
+      }
+      await Linking.openURL(url);
+    } catch (err) {
+      console.error('Failed to open rules link for', ageGroup, err);
+      Alert.alert('Error', 'Could not open the rules link.');
+    }
+  }, []);
+
+  const handleOpenEditRule = useCallback((ageGroup: string) => {
+    setEditingRulesGroup(ageGroup);
+    setRuleUrlInput(ruleLinks[ageGroup] ?? '');
+    setRuleUrlError(null);
+  }, [ruleLinks]);
+
+  const handleSaveRuleLink = useCallback(async () => {
+    if (!editingRulesGroup) return;
+    const trimmed = ruleUrlInput.trim();
+    if (!trimmed) {
+      await removeRuleLink(editingRulesGroup);
+      setEditingRulesGroup(null);
+      setRuleUrlInput('');
+      return;
+    }
+    const isValid = /^https?:\/\/.+/i.test(trimmed);
+    if (!isValid) {
+      setRuleUrlError('Please enter a valid URL starting with http:// or https://');
+      return;
+    }
+    try {
+      await setRuleLink(editingRulesGroup, trimmed);
+      setEditingRulesGroup(null);
+      setRuleUrlInput('');
+      setRuleUrlError(null);
+    } catch (err) {
+      console.error('Failed to save rules link', err);
+      setRuleUrlError('Failed to save. Please try again.');
+    }
+  }, [editingRulesGroup, ruleUrlInput, removeRuleLink, setRuleLink]);
 
   const resetSheetsModal = useCallback(() => {
     setSheetsStep('url');
@@ -1395,6 +1448,89 @@ export default function SettingsScreen() {
               These rules apply only to the Restricted division. Open division has no weight limits.
             </Text>
           </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Age Group Rules</Text>
+
+        <View style={styles.ruleLinksCard}>
+          <View style={styles.ruleLinksHeader}>
+            <View style={[styles.iconBg, { backgroundColor: '#DBEAFE', marginRight: 12 }]}>
+              <BookOpen size={22} color="#2563EB" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.ruleLinksTitle}>Division Rulebooks</Text>
+              <Text style={styles.ruleLinksSubtitle}>
+                {isAdmin
+                  ? 'Paste a link (website or Google Drive PDF) for each age group. Tap to open.'
+                  : 'Tap an age group to open its rulebook.'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.ruleLinksList}>
+            {AGE_GROUPS_FOR_RULES.map((group) => {
+              const url = ruleLinks[group];
+              const hasLink = !!url;
+              return (
+                <View key={group} style={styles.ruleLinkRow}>
+                  <TouchableOpacity
+                    style={[styles.ruleLinkMain, !hasLink && styles.ruleLinkMainEmpty]}
+                    onPress={() => {
+                      if (hasLink) {
+                        void openRulesLink(url, group);
+                      } else if (isAdmin) {
+                        handleOpenEditRule(group);
+                      }
+                    }}
+                    activeOpacity={hasLink || isAdmin ? 0.7 : 1}
+                    disabled={!hasLink && !isAdmin}
+                    testID={`rules-open-${group}`}
+                  >
+                    <View style={styles.ruleLinkBadge}>
+                      <Text style={styles.ruleLinkBadgeText}>{group}</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.ruleLinkTitle}>
+                        {hasLink ? `${group} Rules` : `${group} — No link yet`}
+                      </Text>
+                      {hasLink ? (
+                        <Text style={styles.ruleLinkUrl} numberOfLines={1}>
+                          {url}
+                        </Text>
+                      ) : (
+                        <Text style={styles.ruleLinkEmpty}>
+                          {isAdmin ? 'Tap to add a link' : 'Not configured'}
+                        </Text>
+                      )}
+                    </View>
+                    {hasLink && <ExternalLink size={18} color={Colors.textMuted} />}
+                  </TouchableOpacity>
+
+                  {isAdmin && (
+                    <TouchableOpacity
+                      style={styles.ruleLinkEditButton}
+                      onPress={() => handleOpenEditRule(group)}
+                      activeOpacity={0.7}
+                      testID={`rules-edit-${group}`}
+                    >
+                      <Pencil size={16} color={Colors.primary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+
+          {isAdmin && (
+            <View style={styles.ruleLinksTip}>
+              <Info size={14} color={Colors.textSecondary} />
+              <Text style={styles.ruleLinksTipText}>
+                Tip: For PDFs, upload to Google Drive and use &quot;Anyone with the link&quot; share URL. Links open in the device browser — no file downloads, keeping the app fast.
+              </Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -2791,6 +2927,102 @@ export default function SettingsScreen() {
           </ScrollView>
         </View>
       </Modal>
+
+      <Modal
+        visible={editingRulesGroup !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setEditingRulesGroup(null);
+          setRuleUrlInput('');
+          setRuleUrlError(null);
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {editingRulesGroup ? `${editingRulesGroup} Rules Link` : 'Rules Link'}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setEditingRulesGroup(null);
+                  setRuleUrlInput('');
+                  setRuleUrlError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.ruleModalHint}>
+              Paste a public URL to the rulebook (a website page or a Google Drive PDF share link). Leave empty to remove.
+            </Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>URL</Text>
+              <TextInput
+                style={styles.ruleUrlInput}
+                placeholder="https://..."
+                placeholderTextColor={Colors.textMuted}
+                value={ruleUrlInput}
+                onChangeText={(t) => {
+                  setRuleUrlInput(t);
+                  if (ruleUrlError) setRuleUrlError(null);
+                }}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                multiline
+                testID="rules-url-input"
+              />
+            </View>
+
+            {ruleUrlError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{ruleUrlError}</Text>
+              </View>
+            )}
+
+            <View style={styles.ruleModalActions}>
+              {editingRulesGroup && ruleLinks[editingRulesGroup] && (
+                <TouchableOpacity
+                  style={[styles.sheetActionButton, styles.sheetActionButtonDanger]}
+                  onPress={async () => {
+                    if (!editingRulesGroup) return;
+                    await removeRuleLink(editingRulesGroup);
+                    setEditingRulesGroup(null);
+                    setRuleUrlInput('');
+                  }}
+                  activeOpacity={0.7}
+                  testID="rules-remove"
+                >
+                  <Trash2 size={16} color={Colors.error} />
+                  <Text style={[styles.sheetActionButtonText, styles.sheetActionButtonTextDanger]}>Remove</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.sheetsPrimaryButton, { flex: 1 }, isSavingRuleLink && styles.sheetsPrimaryButtonDisabled]}
+                onPress={handleSaveRuleLink}
+                disabled={isSavingRuleLink}
+                activeOpacity={0.7}
+                testID="rules-save"
+              >
+                {isSavingRuleLink ? (
+                  <ActivityIndicator size="small" color={Colors.white} />
+                ) : (
+                  <Text style={styles.sheetsPrimaryButtonText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </ScrollView>
   );
 }
@@ -4020,6 +4252,129 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#92400E',
     lineHeight: 17,
+  },
+  ruleLinksCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  ruleLinksHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  ruleLinksTitle: {
+    fontSize: 17,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  ruleLinksSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+  ruleLinksList: {
+    gap: 8,
+  },
+  ruleLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  ruleLinkMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  ruleLinkMainEmpty: {
+    backgroundColor: Colors.background,
+    borderStyle: 'dashed' as const,
+  },
+  ruleLinkBadge: {
+    minWidth: 44,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#DBEAFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ruleLinkBadgeText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    color: '#1D4ED8',
+    letterSpacing: 0.5,
+  },
+  ruleLinkTitle: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  ruleLinkUrl: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  ruleLinkEmpty: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+    fontStyle: 'italic' as const,
+  },
+  ruleLinkEditButton: {
+    width: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primaryLight,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  ruleLinksTip: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 14,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  ruleLinksTipText: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.textSecondary,
+    lineHeight: 17,
+  },
+  ruleModalHint: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  ruleUrlInput: {
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 14,
+    color: Colors.text,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    minHeight: 60,
+  },
+  ruleModalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
   },
   pendingSyncRow: {
     flexDirection: 'row',
