@@ -1238,7 +1238,7 @@ export default function SettingsScreen() {
         </View>
       )}
 
-      {canEdit && (
+      {isAdmin && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Event Mode</Text>
           <View style={styles.eventModeCard}>
@@ -1257,7 +1257,7 @@ export default function SettingsScreen() {
                 <Text style={styles.eventModeSubtitle}>
                   {eventMode === 'registration'
                     ? 'Editors can check in players and make changes. Changes sync in the background when saved.'
-                    : 'Everyone views the roster read-only. No writes to Google Sheets. Perfect for game day viewing.'}
+                    : 'Event is locked. Only the admin and users granted edit access can make changes. Everyone else is view-only.'}
                 </Text>
               </View>
             </View>
@@ -1287,8 +1287,8 @@ export default function SettingsScreen() {
                 onPress={() => {
                   if (eventMode !== 'viewOnly') {
                     Alert.alert(
-                      'Lock to View-Only Mode?',
-                      'Nobody will be able to check in or edit players until you switch back. Make sure all registrations are complete.',
+                      'Lock Event to View-Only?',
+                      'Only the admin and users granted edit access (editor PIN) will be able to make changes. Everyone else will be view-only until you switch back. Make sure all registrations are complete.',
                       [
                         { text: 'Cancel', style: 'cancel' },
                         { text: 'Lock', style: 'destructive', onPress: () => void setEventMode('viewOnly') },

@@ -5,6 +5,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react';
 import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } from '@/types';
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
+import { useAuth } from '@/contexts/AuthContext';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -55,6 +56,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const queryClient = useQueryClient();
   // eslint-disable-next-line rork/general-context-optimization
   const trpcUtils = trpc.useUtils();
+  // eslint-disable-next-line rork/general-context-optimization
+  const { canEdit, isAdmin } = useAuth();
   const [filters, setFilters] = useState<RegistrationFilters>({
     club: null,
     ageGroup: null,
@@ -777,9 +780,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const { mutateAsync: updateLocalPlayerAsync } = updateLocalMutation;
 
   const updatePlayer = useCallback(async (player: Player): Promise<void> => {
-    if (eventMode === 'viewOnly') {
-      console.log('View-only mode: blocking player update');
-      throw new Error('The app is in View-Only Mode. Switch to Registration Mode in Settings to make changes.');
+    if (eventMode === 'viewOnly' && !canEdit) {
+      console.log('View-only mode: blocking player update (no edit access)');
+      throw new Error('This event is locked. Only the admin or users granted edit access can make changes.');
     }
     console.log('Saving player update locally first:', player.id, 'photoUri:', player.photoUri ? 'has photo' : 'no photo');
     await updateLocalPlayerAsync(player);
@@ -813,15 +816,15 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Not connected but have saved sheet - queuing write for next sync');
       await addToWriteQueue(player, 'update');
     }
-  }, [eventMode, isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient]);
+  }, [eventMode, canEdit, isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient]);
 
   const { mutateAsync: addSheetsPlayer } = addSheetsMutation;
   const { mutateAsync: addLocalPlayerAsync } = addLocalMutation;
 
   const addPlayer = useCallback(async (newPlayer: Omit<Player, 'id'>) => {
-    if (eventMode === 'viewOnly') {
-      console.log('View-only mode: blocking add player');
-      throw new Error('The app is in View-Only Mode. Switch to Registration Mode in Settings to add players.');
+    if (eventMode === 'viewOnly' && !canEdit) {
+      console.log('View-only mode: blocking add player (no edit access)');
+      throw new Error('This event is locked. Only the admin or users granted edit access can add players.');
     }
     const result = await addLocalPlayerAsync(newPlayer);
     const addedPlayer = result.newPlayer;
@@ -846,13 +849,17 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       await addToWriteQueue(addedPlayer, 'add');
     }
     return addedPlayer;
-  }, [eventMode, isConnected, sheetsConfig, savedSheetInfo, addSheetsPlayer, addLocalPlayerAsync, addToWriteQueue]);
+  }, [eventMode, canEdit, isConnected, sheetsConfig, savedSheetInfo, addSheetsPlayer, addLocalPlayerAsync, addToWriteQueue]);
 
   const setEventMode = useCallback(async (mode: EventMode) => {
+    if (!isAdmin) {
+      console.log('Only admin can change event mode');
+      throw new Error('Only the admin can lock or unlock the event.');
+    }
     console.log('Setting event mode to:', mode);
     setEventModeState(mode);
     await AsyncStorage.setItem(EVENT_MODE_KEY, mode);
-  }, []);
+  }, [isAdmin]);
 
   const { mutateAsync: importPlayersAsync } = importPlayersMutation;
 
