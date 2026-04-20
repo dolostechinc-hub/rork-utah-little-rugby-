@@ -326,14 +326,15 @@ export default function PlayerDetailScreen() {
 
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
       >
       <ScrollView
         ref={scrollRef}
         style={styles.container}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[styles.content, { paddingBottom: 320 }]}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.photoSection}>
           <TouchableOpacity
@@ -463,8 +464,8 @@ export default function PlayerDetailScreen() {
                 onBlur={handleWeightBlur}
                 onFocus={() => {
                   setTimeout(() => {
-                    scrollRef.current?.scrollTo({ y: 380, animated: true });
-                  }, 150);
+                    scrollRef.current?.scrollToEnd({ animated: true });
+                  }, 250);
                 }}
                 placeholder="Enter weight"
                 placeholderTextColor={Colors.textMuted}
