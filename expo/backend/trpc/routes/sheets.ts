@@ -128,15 +128,21 @@ async function writePhotoFormula(
   photoUri: string | null,
 ): Promise<void> {
   try {
-    const photoCell = `${sheetName}!L${rowIndex}`;
-    const cellValue = photoUri && photoUri.startsWith('http')
-      ? `=IMAGE("${photoUri.replace(/"/g, '\\"')}", 1)`
+    const rawUrl = photoUri && photoUri.startsWith('http') ? photoUri : "";
+    const cellValue = rawUrl
+      ? `=IMAGE("${rawUrl.replace(/"/g, '\\"')}", 1)`
       : (photoUri || "");
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: photoCell,
+      range: `${sheetName}!L${rowIndex}:L${rowIndex}`,
       valueInputOption: "USER_ENTERED",
       requestBody: { values: [[cellValue]] },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `${sheetName}!R${rowIndex}:R${rowIndex}`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[rawUrl]] },
     });
     console.log("Photo cell written as IMAGE formula at row:", rowIndex);
   } catch (err) {
