@@ -65,13 +65,17 @@ export default function RosterScreen() {
       result = result.filter(p => p.club === selectedClub);
     }
     if (selectedAgeGroup) {
+      const normalizeAge = (s: string) => s.toUpperCase().replace(/\s+/g, '').replace(/^(\d+)U$/, 'U$1');
+      const target = normalizeAge(selectedAgeGroup);
       result = result.filter(p => {
-        const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup;
-        return effectiveAgeGroup === selectedAgeGroup;
+        const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup || '';
+        return normalizeAge(effectiveAgeGroup) === target;
       });
     }
     if (selectedDivision) {
-      result = result.filter(p => p.division === selectedDivision);
+      const normalizeDiv = (s: string) => s.toLowerCase().trim();
+      const target = normalizeDiv(selectedDivision);
+      result = result.filter(p => normalizeDiv(p.division || '') === target);
     }
     if (selectedTeamName) {
       result = result.filter(p => p.teamName === selectedTeamName);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Image,
   Alert,
   Platform,
+  KeyboardAvoidingView,
+  Keyboard,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import {
@@ -46,6 +48,8 @@ export default function PlayerDetailScreen() {
   const { updatePlayer, isUpdating } = useRegistration();
   const { canEdit } = useAuth();
 
+  const scrollRef = useRef<ScrollView | null>(null);
+  const weightInputRef = useRef<TextInput | null>(null);
   const [isAgeVerified, setIsAgeVerified] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [weight, setWeight] = useState('');
@@ -206,45 +210,34 @@ export default function PlayerDetailScreen() {
     }
     
     console.log('Saving player check-in:', player.id);
-    
+
     let finalPhotoUri = photoUri;
-    
+    let photoUploadFailed = false;
+
     if (photoUri && !photoUri.startsWith('http')) {
       console.log('Uploading photo to cloud storage...');
       setIsUploading(true);
       try {
-        const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, 'utah-little-rugby');
+        const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, 'utah-little-rugby', 3);
         if (uploadedUrl) {
           console.log('Photo uploaded to cloud successfully:', uploadedUrl);
           finalPhotoUri = uploadedUrl;
           setPhotoUri(uploadedUrl);
         } else {
-          console.error('Photo cloud upload returned null');
-          setIsUploading(false);
-          Alert.alert(
-            'Photo Upload Failed',
-            'Could not upload the photo to cloud storage. Photos must be stored in the cloud so all devices can access them. Please check your internet connection and try again.',
-            [{ text: 'OK' }]
-          );
-          return;
+          console.warn('Photo cloud upload returned null, will retry in background');
+          photoUploadFailed = true;
         }
       } catch (uploadError) {
         console.error('Photo cloud upload error:', uploadError);
+        photoUploadFailed = true;
+      } finally {
         setIsUploading(false);
-        Alert.alert(
-          'Photo Upload Failed',
-          'Could not upload the photo to cloud storage. Please check your internet connection and try again.',
-          [{ text: 'OK' }]
-        );
-        return;
       }
-      setIsUploading(false);
     }
-    
+
     const checkedIn = true;
-    
     const finalAgeGroup = playUpAgeGroup || calculatedAgeGroup || player.ageGroup;
-    
+
     try {
       await updatePlayer({
         ...player,
@@ -264,16 +257,53 @@ export default function PlayerDetailScreen() {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
 
-      Alert.alert(
-        'Check-In Complete',
-        `${player.firstName} ${player.lastName} has been verified and checked in. Data synced to Google Sheets.`,
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
+      if (photoUploadFailed) {
+        Alert.alert(
+          'Checked In (Photo Will Retry)',
+          `${player.firstName} ${player.lastName} is checked in. The photo couldn't upload to the cloud right now — it's saved on this device and will sync automatically when the connection improves.`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+
+        if (finalPhotoUri && !finalPhotoUri.startsWith('http')) {
+          (async () => {
+            for (let i = 0; i < 5; i++) {
+              await new Promise(r => setTimeout(r, 5000 * (i + 1)));
+              console.log('Background photo upload retry', i + 1);
+              const url = await uploadPlayerPhoto(player.id, finalPhotoUri!, 'utah-little-rugby', 2);
+              if (url) {
+                console.log('Background photo upload succeeded');
+                try {
+                  await updatePlayer({
+                    ...player,
+                    isAgeVerified,
+                    photoUri: url,
+                    weight,
+                    checkedIn,
+                    checkedInAt: new Date().toISOString(),
+                    restrictionStatus,
+                    ageGroup: finalAgeGroup,
+                    calculatedAgeGroup: calculatedAgeGroup || undefined,
+                  });
+                } catch (e) {
+                  console.error('Failed to save cloud photo URL:', e);
+                }
+                break;
+              }
+            }
+          })();
+        }
+      } else {
+        Alert.alert(
+          'Check-In Complete',
+          `${player.firstName} ${player.lastName} has been verified and checked in.`,
+          [{ text: 'OK', onPress: () => router.back() }]
+        );
+      }
     } catch (error) {
       console.error('Failed to save player check-in:', error);
       Alert.alert(
-        'Sync Failed',
-        'The check-in data could not be synced to Google Sheets. Please check your connection and try again.',
+        'Save Failed',
+        'The check-in could not be saved. Please try again.',
         [{ text: 'OK' }]
       );
     }
@@ -294,7 +324,17 @@ export default function PlayerDetailScreen() {
         }}
       />
 
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+      >
+      <ScrollView
+        ref={scrollRef}
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.photoSection}>
           <TouchableOpacity
             style={[
@@ -416,13 +456,21 @@ export default function PlayerDetailScreen() {
             <View style={styles.weightContent}>
               <Text style={styles.weightLabel}>Weight (lbs)</Text>
               <TextInput
+                ref={weightInputRef}
                 style={styles.weightInput}
                 value={weight}
                 onChangeText={handleWeightChange}
                 onBlur={handleWeightBlur}
+                onFocus={() => {
+                  setTimeout(() => {
+                    scrollRef.current?.scrollTo({ y: 380, animated: true });
+                  }, 150);
+                }}
                 placeholder="Enter weight"
                 placeholderTextColor={Colors.textMuted}
                 keyboardType="numeric"
+                returnKeyType="done"
+                onSubmitEditing={() => Keyboard.dismiss()}
                 editable={canEdit}
                 testID="player-weight-input"
               />
@@ -492,6 +540,7 @@ export default function PlayerDetailScreen() {
           </View>
         )}
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {player && (
         <WeightRestrictionModal
