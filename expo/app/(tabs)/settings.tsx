@@ -137,12 +137,11 @@ export default function SettingsScreen() {
     login, 
     logout, 
     changeAdminPin,
-    setEditorPin,
-    disableEditorAccess,
-    revokeAllEditorSessions,
-    lockEventAndRotateEditorPin,
-    editorPinEnabled,
+    issueEditorPin,
+    revokeAllEditorAccess,
+    editorSession,
   } = useAuth();
+  const editorPinEnabled = true;
 
   const {
     currentOrg,
@@ -547,14 +546,14 @@ export default function SettingsScreen() {
 
   const handleLogin = async () => {
     setPinError(null);
-    const result = await login(pinInput);
+    const result = await login(pinInput, currentOrg?.id);
     if (result.success) {
       setShowLoginModal(false);
       setPinInput('');
       const roleLabel = result.role === 'admin' ? 'Admin' : 'Editor';
       Alert.alert('Success', `You now have ${roleLabel} access.`);
     } else {
-      setPinError('Invalid PIN. Please try again.');
+      setPinError(result.error ?? 'Invalid PIN. Please try again.');
     }
   };
 
@@ -598,21 +597,29 @@ export default function SettingsScreen() {
 
   const handleSetEditorPin = async () => {
     setPinError(null);
-    if (editorPinInput.length < 4) {
-      setPinError('Editor PIN must be at least 4 digits.');
+    if (!currentOrg) {
+      setPinError('Select an organization first.');
       return;
     }
-    const success = await setEditorPin(adminVerifyPin, editorPinInput);
-    if (success) {
+    try {
+      const { pin, expiresAt } = await issueEditorPin(currentOrg.id, {
+        expiresInMinutes: 480,
+        label: editorPinInput || undefined,
+      });
       setShowEditorPinModal(false);
       setAdminVerifyPin('');
       setEditorPinInput('');
+      const expiresLabel = new Date(expiresAt).toLocaleTimeString();
+      if (Platform.OS !== 'web') {
+        await Clipboard.setStringAsync(pin);
+      }
       Alert.alert(
-        'Editor PIN Set',
-        'Editor access PIN has been set. Share this PIN with people you want to grant edit access. Previous editor sessions have been logged out.'
+        'Editor PIN Generated',
+        `PIN: ${pin}\n\nExpires at ${expiresLabel}.\n\nShare this PIN with staff who need editor access. The PIN has been copied to your clipboard.`,
       );
-    } else {
-      setPinError('Admin PIN verification failed.');
+    } catch (err) {
+      console.error('issueEditorPin failed', err);
+      setPinError((err as Error).message || 'Could not generate PIN.');
     }
   };
 
@@ -635,13 +642,17 @@ export default function SettingsScreen() {
 
   const handleConfirmDisableEditor = async () => {
     setPinError(null);
-    const success = await disableEditorAccess(adminVerifyPin);
-    if (success) {
+    if (!currentOrg) {
+      setPinError('Select an organization first.');
+      return;
+    }
+    try {
+      await revokeAllEditorAccess(currentOrg.id);
       setShowRevokeModal(false);
       setAdminVerifyPin('');
-      Alert.alert('Editor Access Disabled', 'All editor sessions have been revoked.');
-    } else {
-      setPinError('Admin PIN verification failed.');
+      Alert.alert('Editor Access Revoked', 'All editor PINs and sessions have been revoked.');
+    } catch (err) {
+      setPinError((err as Error).message || 'Failed to revoke.');
     }
   };
 
@@ -741,18 +752,21 @@ export default function SettingsScreen() {
   };
 
   const _handleRevokeEditorSessions = () => {
+    if (!currentOrg) return;
     Alert.alert(
       'Revoke All Editor Sessions',
-      'This will log out all editors. They will need to re-enter the editor PIN to regain access. Continue?',
+      'This will log out all editors. They will need a new editor PIN to regain access. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Revoke',
           style: 'destructive',
           onPress: async () => {
-            const success = await revokeAllEditorSessions(adminVerifyPin || currentPinInput);
-            if (success) {
+            try {
+              await revokeAllEditorAccess(currentOrg.id);
               Alert.alert('Sessions Revoked', 'All editor sessions have been logged out.');
+            } catch (err) {
+              Alert.alert('Error', (err as Error).message);
             }
           },
         },
@@ -1352,7 +1366,9 @@ export default function SettingsScreen() {
                           style: 'destructive',
                           onPress: async () => {
                             try {
-                              const newPin = await lockEventAndRotateEditorPin();
+                              if (!currentOrg) throw new Error('Select an organization first');
+                              await revokeAllEditorAccess(currentOrg.id);
+                              const { pin: newPin } = await issueEditorPin(currentOrg.id, { expiresInMinutes: 480 });
                               await setEventMode('viewOnly');
                               Alert.alert(
                                 'Event Locked',

@@ -16,6 +16,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRegistration } from '@/contexts/RegistrationContext';
+import { useOrganization } from '@/contexts/OrganizationContext';
 import { uploadPlayerPhoto } from '@/lib/supabase';
 import FilterDropdown from '@/components/FilterDropdown';
 import Colors from '@/constants/colors';
@@ -32,6 +33,7 @@ import {
 export default function AddPlayerScreen() {
   const insets = useSafeAreaInsets();
   const { clubs, ageGroups, divisions, addPlayer, isAdding } = useRegistration();
+  const { currentOrg } = useOrganization();
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -185,7 +187,7 @@ export default function AddPlayerScreen() {
         console.log('Uploading photo to cloud storage...');
         const tempPlayerId = `new-${Date.now()}`;
         try {
-          const uploadedUrl = await uploadPlayerPhoto(tempPlayerId, photoUri, 'utah-little-rugby');
+          const uploadedUrl = await uploadPlayerPhoto(tempPlayerId, photoUri, currentOrg?.id ?? 'utah-little-rugby');
           if (uploadedUrl) {
             console.log('Photo uploaded successfully:', uploadedUrl);
             finalPhotoUri = uploadedUrl;

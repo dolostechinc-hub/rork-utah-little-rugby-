@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
+import { getEditorSession } from '@/lib/editorSession';
 
 const supabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL ??
@@ -63,6 +64,54 @@ async function readPhotoAsBody(photoUri: string): Promise<ArrayBuffer | Blob | n
   }
 }
 
+interface SignedUpload {
+  path: string;
+  token: string;
+  signedUrl: string;
+  publicUrl: string;
+}
+
+async function requestSignedUpload(
+  orgId: string,
+  playerId: string,
+  ext: string = 'jpg',
+): Promise<SignedUpload | null> {
+  const session = getEditorSession();
+  const {
+    data: { session: authSession },
+  } = await supabase.auth.getSession();
+
+  if (!session?.token && !authSession) {
+    console.error('No editor session or admin auth; cannot upload.');
+    return null;
+  }
+
+  const url = `${supabaseUrl}/functions/v1/signed-upload-url`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    apikey: supabaseAnonKey ?? '',
+    Authorization: `Bearer ${authSession?.access_token ?? supabaseAnonKey ?? ''}`,
+  };
+  if (session?.token) headers['x-editor-session'] = session.token;
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ orgId, playerId, ext, sessionToken: session?.token }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      console.warn('signed-upload-url failed:', res.status, txt);
+      return null;
+    }
+    return (await res.json()) as SignedUpload;
+  } catch (err) {
+    console.error('signed-upload-url request error:', err);
+    return null;
+  }
+}
+
 export async function uploadPlayerPhoto(
   playerId: string,
   photoUri: string,
@@ -82,11 +131,6 @@ export async function uploadPlayerPhoto(
       return photoUri;
     }
 
-    const fileExt = 'jpg';
-    const fileName = `${orgId}/${playerId}-${Date.now()}.${fileExt}`;
-
-    console.log('Uploading to Supabase Storage:', fileName);
-
     const uploadBody = await readPhotoAsBody(photoUri);
     if (!uploadBody) {
       console.error('Could not read photo file');
@@ -95,26 +139,33 @@ export async function uploadPlayerPhoto(
 
     let lastError: string | null = null;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      console.log(`Upload attempt ${attempt}/${maxRetries}`);
+      console.log(`Upload attempt ${attempt}/${maxRetries} (signed)`);
+
+      const signed = await requestSignedUpload(orgId, playerId, 'jpg');
+      if (!signed) {
+        lastError = 'Could not obtain signed upload URL (editor permission required)';
+        if (attempt < maxRetries) {
+          await new Promise((res) => setTimeout(res, 800 * attempt));
+        }
+        continue;
+      }
+
       const { data, error } = await supabase.storage
         .from('player_photos')
-        .upload(fileName, uploadBody, {
+        .uploadToSignedUrl(signed.path, signed.token, uploadBody, {
           contentType: 'image/jpeg',
           upsert: true,
         });
 
       if (!error && data) {
-        const { data: urlData } = supabase.storage
-          .from('player_photos')
-          .getPublicUrl(data.path);
-        console.log('Photo uploaded to cloud successfully:', urlData.publicUrl);
-        return urlData.publicUrl;
+        console.log('Photo uploaded via signed URL:', signed.publicUrl);
+        return signed.publicUrl;
       }
 
       lastError = error?.message || 'unknown error';
       console.warn(`Upload attempt ${attempt} failed:`, lastError);
       if (attempt < maxRetries) {
-        await new Promise(res => setTimeout(res, 800 * attempt));
+        await new Promise((res) => setTimeout(res, 800 * attempt));
       }
     }
 

@@ -29,6 +29,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useRegistration, usePlayer } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { useOrganization } from '@/contexts/OrganizationContext';
 import { uploadPlayerPhoto } from '@/lib/supabase';
 import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
@@ -47,6 +48,7 @@ export default function PlayerDetailScreen() {
   const player = usePlayer(id || '');
   const { updatePlayer, isUpdating } = useRegistration();
   const { canEdit } = useAuth();
+  const { currentOrg } = useOrganization();
 
   const scrollRef = useRef<ScrollView | null>(null);
   const weightInputRef = useRef<TextInput | null>(null);
@@ -218,7 +220,7 @@ export default function PlayerDetailScreen() {
       console.log('Uploading photo to cloud storage...');
       setIsUploading(true);
       try {
-        const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, 'utah-little-rugby', 3);
+        const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, currentOrg?.id ?? 'utah-little-rugby', 3);
         if (uploadedUrl) {
           console.log('Photo uploaded to cloud successfully:', uploadedUrl);
           finalPhotoUri = uploadedUrl;
@@ -269,7 +271,7 @@ export default function PlayerDetailScreen() {
             for (let i = 0; i < 5; i++) {
               await new Promise(r => setTimeout(r, 5000 * (i + 1)));
               console.log('Background photo upload retry', i + 1);
-              const url = await uploadPlayerPhoto(player.id, finalPhotoUri!, 'utah-little-rugby', 2);
+              const url = await uploadPlayerPhoto(player.id, finalPhotoUri!, currentOrg?.id ?? 'utah-little-rugby', 2);
               if (url) {
                 console.log('Background photo upload succeeded');
                 try {
