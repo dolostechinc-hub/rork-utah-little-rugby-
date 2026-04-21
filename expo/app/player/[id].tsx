@@ -133,25 +133,42 @@ export default function PlayerDetailScreen() {
   };
 
   const handleTakePhoto = async () => {
-    const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-    
-    if (!permissionResult.granted) {
-      Alert.alert('Permission Required', 'Camera access is needed to take photos.');
-      return;
-    }
+    try {
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
 
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      setPhotoUri(result.assets[0].uri);
-      
-      if (Platform.OS !== 'web') {
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Required', 'Camera access is needed to take photos.');
+        return;
       }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: Platform.OS === 'ios',
+        aspect: [1, 1],
+        quality: 0.85,
+        exif: false,
+      });
+
+      if (!result.canceled && result.assets && result.assets[0]) {
+        const asset = result.assets[0];
+        console.log('[player] photo captured', {
+          uri: asset.uri,
+          width: asset.width,
+          height: asset.height,
+          mimeType: asset.mimeType,
+          fileSize: asset.fileSize,
+          platform: Platform.OS,
+        });
+        setPhotoUri(asset.uri);
+
+        if (Platform.OS !== 'web') {
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[player] camera error:', err);
+      Alert.alert('Camera error', message);
     }
   };
 
