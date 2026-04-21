@@ -3,8 +3,66 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
 import { getEditorSession } from '@/lib/editorSession';
+
+const PHOTO_MAX_DIMENSION = 1400;
+const PHOTO_COMPRESSION = 0.75;
+const PHOTO_MAX_BYTES = 2 * 1024 * 1024;
+
+async function getFileSize(uri: string): Promise<number | null> {
+  if (Platform.OS === 'web') return null;
+  try {
+    const info = await FileSystem.getInfoAsync(uri, { size: true });
+    if (info.exists && typeof info.size === 'number') return info.size;
+  } catch (err) {
+    console.warn('[compressPhoto] getInfoAsync failed:', err);
+  }
+  return null;
+}
+
+export async function compressPhotoForUpload(photoUri: string): Promise<string> {
+  if (photoUri.startsWith('http')) return photoUri;
+
+  try {
+    console.log('[compressPhoto] start', { photoUri });
+    let result = await ImageManipulator.manipulateAsync(
+      photoUri,
+      [{ resize: { width: PHOTO_MAX_DIMENSION } }],
+      {
+        compress: PHOTO_COMPRESSION,
+        format: ImageManipulator.SaveFormat.JPEG,
+      },
+    );
+    console.log('[compressPhoto] first pass', { uri: result.uri, width: result.width, height: result.height });
+
+    let size = await getFileSize(result.uri);
+    console.log('[compressPhoto] first pass size', size);
+
+    let compress = PHOTO_COMPRESSION;
+    let dimension = PHOTO_MAX_DIMENSION;
+    let pass = 0;
+    while (size !== null && size > PHOTO_MAX_BYTES && pass < 3) {
+      pass += 1;
+      compress = Math.max(0.4, compress - 0.15);
+      dimension = Math.max(800, Math.round(dimension * 0.85));
+      console.log('[compressPhoto] recompressing', { pass, compress, dimension, prevSize: size });
+      result = await ImageManipulator.manipulateAsync(
+        result.uri,
+        [{ resize: { width: dimension } }],
+        { compress, format: ImageManipulator.SaveFormat.JPEG },
+      );
+      size = await getFileSize(result.uri);
+      console.log('[compressPhoto] pass size', { pass, size });
+    }
+
+    return result.uri;
+  } catch (err) {
+    console.warn('[compressPhoto] failed, using original:', err);
+    return photoUri;
+  }
+}
 
 const supabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL ??
@@ -150,7 +208,10 @@ export async function uploadPlayerPhoto(
     return photoUri;
   }
 
-  const photo = await readPhotoAsBody(photoUri);
+  const processedUri = await compressPhotoForUpload(photoUri);
+  console.log('[uploadPlayerPhoto] compressed', { processedUri, changed: processedUri !== photoUri });
+
+  const photo = await readPhotoAsBody(processedUri);
   const mimeType = 'image/jpeg';
   console.log('[uploadPlayerPhoto] body ready', {
     source: photo.source,
