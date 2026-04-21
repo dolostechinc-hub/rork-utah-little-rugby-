@@ -30,7 +30,7 @@ import * as Haptics from 'expo-haptics';
 import { useRegistration, usePlayer } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOrganization } from '@/contexts/OrganizationContext';
-import { uploadPlayerPhoto } from '@/lib/supabase';
+import { uploadPlayerPhoto, debugUploadTest } from '@/lib/supabase';
 import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
 import WeightRestrictionModal from '@/components/WeightRestrictionModal';
@@ -214,27 +214,50 @@ export default function PlayerDetailScreen() {
     console.log('Saving player check-in:', player.id);
 
     let finalPhotoUri = photoUri;
-    let photoUploadFailed = false;
+    let uploadErrorMessage: string | null = null;
 
     if (photoUri && !photoUri.startsWith('http')) {
       console.log('Uploading photo to cloud storage...');
       setIsUploading(true);
       try {
         const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, currentOrg?.id ?? 'utah-little-rugby', 3);
-        if (uploadedUrl) {
-          console.log('Photo uploaded to cloud successfully:', uploadedUrl);
-          finalPhotoUri = uploadedUrl;
-          setPhotoUri(uploadedUrl);
-        } else {
-          console.warn('Photo cloud upload returned null, will retry in background');
-          photoUploadFailed = true;
-        }
+        console.log('Photo uploaded to cloud successfully:', uploadedUrl);
+        finalPhotoUri = uploadedUrl;
+        setPhotoUri(uploadedUrl);
       } catch (uploadError) {
+        uploadErrorMessage = uploadError instanceof Error ? uploadError.message : String(uploadError);
         console.error('Photo cloud upload error:', uploadError);
-        photoUploadFailed = true;
       } finally {
         setIsUploading(false);
       }
+    }
+
+    if (uploadErrorMessage) {
+      Alert.alert(
+        'Photo upload failed',
+        `Photo upload failed: ${uploadErrorMessage}`,
+        [
+          { text: 'OK' },
+          {
+            text: 'Run Debug Test',
+            onPress: async () => {
+              const result = await debugUploadTest(currentOrg?.id ?? 'utah-little-rugby');
+              Alert.alert(
+                result.success ? 'Debug upload OK' : 'Debug upload failed',
+                [
+                  `supabaseUrl: ${result.supabaseUrl ?? '(missing)'}`,
+                  `bucket: ${result.bucket}`,
+                  `path: ${result.path}`,
+                  `size: ${result.size}`,
+                  result.url ? `url: ${result.url}` : undefined,
+                  result.error ? `error: ${result.error}` : undefined,
+                ].filter(Boolean).join('\n'),
+              );
+            },
+          },
+        ],
+      );
+      return;
     }
 
     const checkedIn = true;
@@ -259,48 +282,11 @@ export default function PlayerDetailScreen() {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
 
-      if (photoUploadFailed) {
-        Alert.alert(
-          'Checked In (Photo Will Retry)',
-          `${player.firstName} ${player.lastName} is checked in. The photo couldn't upload to the cloud right now — it's saved on this device and will sync automatically when the connection improves.`,
-          [{ text: 'OK', onPress: () => router.back() }]
-        );
-
-        if (finalPhotoUri && !finalPhotoUri.startsWith('http')) {
-          (async () => {
-            for (let i = 0; i < 5; i++) {
-              await new Promise(r => setTimeout(r, 5000 * (i + 1)));
-              console.log('Background photo upload retry', i + 1);
-              const url = await uploadPlayerPhoto(player.id, finalPhotoUri!, currentOrg?.id ?? 'utah-little-rugby', 2);
-              if (url) {
-                console.log('Background photo upload succeeded');
-                try {
-                  await updatePlayer({
-                    ...player,
-                    isAgeVerified,
-                    photoUri: url,
-                    weight,
-                    checkedIn,
-                    checkedInAt: new Date().toISOString(),
-                    restrictionStatus,
-                    ageGroup: finalAgeGroup,
-                    calculatedAgeGroup: calculatedAgeGroup || undefined,
-                  });
-                } catch (e) {
-                  console.error('Failed to save cloud photo URL:', e);
-                }
-                break;
-              }
-            }
-          })();
-        }
-      } else {
-        Alert.alert(
-          'Check-In Complete',
-          `${player.firstName} ${player.lastName} has been verified and checked in.`,
-          [{ text: 'OK', onPress: () => router.back() }]
-        );
-      }
+      Alert.alert(
+        'Check-In Complete',
+        `${player.firstName} ${player.lastName} has been verified and checked in.`,
+        [{ text: 'OK', onPress: () => router.back() }]
+      );
     } catch (error) {
       console.error('Failed to save player check-in:', error);
       Alert.alert(

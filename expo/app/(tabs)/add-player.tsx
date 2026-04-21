@@ -188,25 +188,12 @@ export default function AddPlayerScreen() {
         const tempPlayerId = `new-${Date.now()}`;
         try {
           const uploadedUrl = await uploadPlayerPhoto(tempPlayerId, photoUri, currentOrg?.id ?? 'utah-little-rugby');
-          if (uploadedUrl) {
-            console.log('Photo uploaded successfully:', uploadedUrl);
-            finalPhotoUri = uploadedUrl;
-          } else {
-            console.error('Photo upload returned null');
-            Alert.alert(
-              'Photo Upload Failed',
-              'Could not upload the photo to cloud storage. Photos must be stored in the cloud so all devices can see them. Please check your internet connection and try again.',
-              [{ text: 'OK' }]
-            );
-            return;
-          }
+          console.log('Photo uploaded successfully:', uploadedUrl);
+          finalPhotoUri = uploadedUrl;
         } catch (uploadError) {
+          const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
           console.error('Photo upload error:', uploadError);
-          Alert.alert(
-            'Photo Upload Failed',
-            'Could not upload the photo to cloud storage. Please check your internet connection and try again.',
-            [{ text: 'OK' }]
-          );
+          Alert.alert('Photo upload failed', `Photo upload failed: ${message}`, [{ text: 'OK' }]);
           return;
         }
       }
