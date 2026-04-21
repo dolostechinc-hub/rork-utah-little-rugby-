@@ -21,6 +21,9 @@
         "appleId": "utahsportsrecording@gmail.com",
         "ascAppId": "6759469923",
         "appleTeamId": "Z2BADWBT7S"
+      },
+      "android": {
+        "track": "internal"
       }
     }
   }
