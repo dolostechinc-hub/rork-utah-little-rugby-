@@ -141,22 +141,52 @@ interface SignedUpload {
   publicUrl: string;
 }
 
+export interface SignedUploadDebug {
+  endpoint: string;
+  hasEditorSession: boolean;
+  editorSessionExpiresAt: string | null;
+  hasAdminAuth: boolean;
+  status: number | null;
+  responseText: string | null;
+  networkError: string | null;
+}
+
+export interface SignedUploadResult {
+  signed: SignedUpload | null;
+  errorMessage: string | null;
+  debug: SignedUploadDebug;
+}
+
 async function requestSignedUpload(
   orgId: string,
   playerId: string,
   ext: string = 'jpg',
-): Promise<SignedUpload | null> {
+): Promise<SignedUploadResult> {
   const session = getEditorSession();
   const {
     data: { session: authSession },
   } = await supabase.auth.getSession();
 
+  const endpoint = `${supabaseUrl}/functions/v1/signed-upload-url`;
+  const debug: SignedUploadDebug = {
+    endpoint,
+    hasEditorSession: !!session?.token,
+    editorSessionExpiresAt: session?.expiresAt ?? null,
+    hasAdminAuth: !!authSession,
+    status: null,
+    responseText: null,
+    networkError: null,
+  };
+
+  console.log('[requestSignedUpload] start', { orgId, playerId, ext, ...debug });
+
   if (!session?.token && !authSession) {
-    console.error('No editor session or admin auth; cannot upload.');
-    return null;
+    const msg =
+      'Not authorized to upload: no editor session and not signed in as admin. Enter the editor PIN in Settings, or sign in as admin.';
+    console.error('[requestSignedUpload]', msg);
+    return { signed: null, errorMessage: msg, debug };
   }
 
-  const url = `${supabaseUrl}/functions/v1/signed-upload-url`;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     apikey: supabaseAnonKey ?? '',
@@ -165,20 +195,43 @@ async function requestSignedUpload(
   if (session?.token) headers['x-editor-session'] = session.token;
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({ orgId, playerId, ext, sessionToken: session?.token }),
     });
+    debug.status = res.status;
+    const txt = await res.text();
+    debug.responseText = txt;
+
     if (!res.ok) {
-      const txt = await res.text();
-      console.warn('signed-upload-url failed:', res.status, txt);
-      return null;
+      let parsedMsg = txt;
+      try {
+        const parsed = JSON.parse(txt) as { error?: string };
+        if (parsed?.error) parsedMsg = parsed.error;
+      } catch {}
+      const msg = `Edge function signed-upload-url returned ${res.status}: ${parsedMsg || '(empty body)'}`;
+      console.warn('[requestSignedUpload] non-OK', { status: res.status, body: txt });
+      return { signed: null, errorMessage: msg, debug };
     }
-    return (await res.json()) as SignedUpload;
+
+    try {
+      const parsed = JSON.parse(txt) as SignedUpload;
+      return { signed: parsed, errorMessage: null, debug };
+    } catch (parseErr) {
+      const msg = `Edge function returned invalid JSON: ${txt.slice(0, 200)}`;
+      console.error('[requestSignedUpload] parse error', parseErr);
+      return { signed: null, errorMessage: msg, debug };
+    }
   } catch (err) {
-    console.error('signed-upload-url request error:', err);
-    return null;
+    const msg = err instanceof Error ? err.message : String(err);
+    debug.networkError = msg;
+    console.error('[requestSignedUpload] network error', err);
+    return {
+      signed: null,
+      errorMessage: `Network error calling ${endpoint}: ${msg}`,
+      debug,
+    };
   }
 }
 
@@ -225,10 +278,19 @@ export async function uploadPlayerPhoto(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     console.log(`[uploadPlayerPhoto] attempt ${attempt}/${maxRetries}`);
 
-    const signed = await requestSignedUpload(orgId, playerId, 'jpg');
+    const { signed, errorMessage: signedErr, debug: signedDebug } = await requestSignedUpload(
+      orgId,
+      playerId,
+      'jpg',
+    );
     if (!signed) {
-      lastErrorMessage = 'Could not obtain signed upload URL (editor permission required or edge function failed)';
-      console.warn('[uploadPlayerPhoto]', lastErrorMessage);
+      lastErrorMessage = signedErr ?? 'Could not obtain signed upload URL';
+      lastErrorObj = signedDebug;
+      console.warn('[uploadPlayerPhoto] signed upload unavailable', {
+        attempt,
+        message: lastErrorMessage,
+        debug: signedDebug,
+      });
       if (attempt < maxRetries) {
         await new Promise((res) => setTimeout(res, 800 * attempt));
       }
@@ -275,6 +337,14 @@ export async function uploadPlayerPhoto(
     bucket: PLAYER_PHOTOS_BUCKET,
   });
   throw new Error(lastErrorMessage);
+}
+
+export async function debugSignedUploadTest(
+  orgId: string,
+  playerId: string = `debug-player-${Date.now()}`,
+): Promise<SignedUploadResult> {
+  console.log('[debugSignedUploadTest] start', { orgId, playerId });
+  return requestSignedUpload(orgId, playerId, 'jpg');
 }
 
 export async function debugUploadTest(orgId: string = 'debug'): Promise<{
