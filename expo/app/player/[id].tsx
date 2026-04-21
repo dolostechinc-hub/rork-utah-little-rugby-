@@ -273,7 +273,7 @@ export default function PlayerDetailScreen() {
             },
           },
           {
-            text: 'Debug Signed URL',
+            text: 'SIGNED URL DEBUG',
             onPress: async () => {
               const r = await debugSignedUploadTest(
                 currentOrg?.id ?? 'utah-little-rugby',
@@ -371,6 +371,9 @@ export default function PlayerDetailScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.photoSection}>
+          <View style={styles.debugBuildMarker} testID="debug-build-marker">
+            <Text style={styles.debugBuildMarkerText}>DEBUG BUILD 2026-04-21</Text>
+          </View>
           <TouchableOpacity
             style={[
               styles.photoContainer,
@@ -628,6 +631,19 @@ const styles = StyleSheet.create({
   photoSection: {
     alignItems: 'center',
     marginBottom: 24,
+  },
+  debugBuildMarker: {
+    backgroundColor: '#FF2D55',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  debugBuildMarkerText: {
+    color: '#FFFFFF',
+    fontWeight: '800' as const,
+    fontSize: 12,
+    letterSpacing: 1,
   },
   photoContainer: {
     position: 'relative',
