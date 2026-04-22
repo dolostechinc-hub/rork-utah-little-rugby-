@@ -85,13 +85,28 @@ export async function compressPhotoForUpload(photoUri: string): Promise<string> 
   }
 }
 
+const FALLBACK_SUPABASE_URL = 'https://pfhkypuavngiidyrrnpn.supabase.co';
+const FALLBACK_SUPABASE_ANON_KEY = 'sb_publishable_o6d-VXD_hzD1AYntd2_guw_dj-8ZyYX';
+
 const supabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL ??
-  Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL;
+  (Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ??
+  FALLBACK_SUPABASE_URL;
 
 const supabaseAnonKey =
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
-  Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  (Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined) ??
+  FALLBACK_SUPABASE_ANON_KEY;
+
+console.log('[supabase] init', {
+  hasUrl: !!supabaseUrl,
+  hasKey: !!supabaseAnonKey,
+  urlSource: process.env.EXPO_PUBLIC_SUPABASE_URL
+    ? 'process.env'
+    : Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL
+    ? 'expo-constants'
+    : 'fallback',
+});
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn(
@@ -197,12 +212,6 @@ export async function uploadPlayerPhoto(
   orgId: string,
   maxRetries: number = 3
 ): Promise<string> {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error(
-      'Supabase not configured: missing EXPO_PUBLIC_SUPABASE_URL or EXPO_PUBLIC_SUPABASE_ANON_KEY'
-    );
-  }
-
   if (!photoUri) {
     throw new Error('No photo URI provided');
   }
