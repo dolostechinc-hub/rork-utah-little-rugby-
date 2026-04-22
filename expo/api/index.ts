@@ -3,8 +3,9 @@ import { handle } from "hono/vercel";
 
 const app = new Hono();
 
-app.get("/", (c) => {
-  return c.json({ status: "ok", message: "API working" });
+// IMPORTANT: match Vercel path
+app.get("/api", (c) => {
+  return c.json({ status: "ok", message: "API working (fixed)" });
 });
 
 export const config = {
