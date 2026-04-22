@@ -124,8 +124,6 @@ export default function SettingsScreen() {
     { key: 'ageGroup', label: 'Age Group', required: true },
     { key: 'division', label: 'Division', required: true },
     { key: 'dateOfBirth', label: 'Date of Birth', required: false },
-    { key: 'parentName', label: 'Parent Name', required: false },
-    { key: 'parentPhone', label: 'Phone', required: false },
     { key: 'weight', label: 'Weight', required: false },
   ];
 
@@ -379,8 +377,6 @@ export default function SettingsScreen() {
       division: row[sheetsColumnMapping.division] || '',
       teamName: sheetsColumnMapping.teamName !== undefined ? row[sheetsColumnMapping.teamName] || '' : '',
       dateOfBirth: sheetsColumnMapping.dateOfBirth !== undefined ? row[sheetsColumnMapping.dateOfBirth] || '' : '',
-      parentName: sheetsColumnMapping.parentName !== undefined ? row[sheetsColumnMapping.parentName] || '' : '',
-      parentPhone: sheetsColumnMapping.parentPhone !== undefined ? row[sheetsColumnMapping.parentPhone] || '' : '',
       weight: sheetsColumnMapping.weight !== undefined ? row[sheetsColumnMapping.weight] || '' : '',
     })).filter(p => p.firstName && p.lastName);
 
@@ -409,8 +405,6 @@ export default function SettingsScreen() {
         division: p.division || '',
         teamName: p.teamName || '',
         dateOfBirth: p.dateOfBirth || '',
-        parentName: p.parentName || '',
-        parentPhone: p.parentPhone || '',
         weight: p.weight || '',
         isAgeVerified: false,
         photoUri: null,

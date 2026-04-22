@@ -19,7 +19,6 @@ import {
   Circle,
   User,
   Calendar,
-  Phone,
   Scale,
   ArrowLeft,
   Save,
@@ -442,25 +441,6 @@ export default function PlayerDetailScreen() {
               )}
             </View>
 
-            <View style={styles.detailRow}>
-              <User size={18} color={Colors.textSecondary} />
-              <Text style={styles.detailLabel}>Parent/Guardian</Text>
-              {canEdit ? (
-                <Text style={styles.detailValue}>{player.parentName || 'Not provided'}</Text>
-              ) : (
-                <Text style={styles.obfuscatedValue}>••••••••••</Text>
-              )}
-            </View>
-
-            <View style={styles.detailRow}>
-              <Phone size={18} color={Colors.textSecondary} />
-              <Text style={styles.detailLabel}>Phone</Text>
-              {canEdit ? (
-                <Text style={styles.detailValue}>{player.parentPhone || 'Not provided'}</Text>
-              ) : (
-                <Text style={styles.obfuscatedValue}>••••••••••</Text>
-              )}
-            </View>
           </View>
 
           {canEdit && (

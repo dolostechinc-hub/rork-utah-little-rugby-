@@ -13,8 +13,8 @@ export interface Player {
   division: string;
   teamName: string;
   dateOfBirth: string;
-  parentName: string;
-  parentPhone: string;
+  parentName?: string;
+  parentPhone?: string;
   isAgeVerified: boolean;
   photoUri: string | null;
   weight: string;

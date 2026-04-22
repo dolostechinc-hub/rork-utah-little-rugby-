@@ -42,8 +42,6 @@ export interface ParsedPlayer {
   division: string;
   teamName: string;
   dateOfBirth: string;
-  parentName: string;
-  parentPhone: string;
   weight: string;
 }
 
@@ -59,8 +57,6 @@ const ALL_FIELDS: { key: keyof ParsedPlayer; label: string; required: boolean }[
   { key: 'division', label: 'Division', required: false },
   { key: 'teamName', label: 'Team Name', required: false },
   { key: 'dateOfBirth', label: 'Date of Birth', required: false },
-  { key: 'parentName', label: 'Parent Name', required: false },
-  { key: 'parentPhone', label: 'Phone', required: false },
   { key: 'weight', label: 'Weight', required: false },
 ];
 

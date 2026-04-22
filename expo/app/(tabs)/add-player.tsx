@@ -41,8 +41,6 @@ export default function AddPlayerScreen() {
   const [ageGroup, setAgeGroup] = useState<string | null>(null);
   const [division, setDivision] = useState<string | null>(null);
   const [dateOfBirth, setDateOfBirth] = useState('');
-  const [parentName, setParentName] = useState('');
-  const [parentPhone, setParentPhone] = useState('');
   const [weight, setWeight] = useState('');
   const [isAgeVerified, setIsAgeVerified] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -57,8 +55,6 @@ export default function AddPlayerScreen() {
     setAgeGroup(null);
     setDivision(null);
     setDateOfBirth('');
-    setParentName('');
-    setParentPhone('');
     setWeight('');
     setIsAgeVerified(false);
     setPhotoUri(null);
@@ -173,12 +169,6 @@ export default function AddPlayerScreen() {
     if (!division) {
       missingFields.push('Division');
     }
-    if (!parentName.trim()) {
-      missingFields.push('Parent Name');
-    }
-    if (!parentPhone.trim()) {
-      missingFields.push('Phone Number');
-    }
     if (!isAgeVerified) {
       missingFields.push('Age Verification');
     }
@@ -223,8 +213,6 @@ export default function AddPlayerScreen() {
         division: division || '',
         teamName: '',
         dateOfBirth: dateOfBirth.trim(),
-        parentName: parentName.trim(),
-        parentPhone: parentPhone.trim(),
         weight: weight.trim(),
         isAgeVerified: true,
         photoUri: finalPhotoUri,
@@ -415,33 +403,6 @@ export default function AddPlayerScreen() {
             </View>
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Parent/Guardian *</Text>
-            
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Parent Name *</Text>
-              <TextInput
-                style={styles.input}
-                value={parentName}
-                onChangeText={setParentName}
-                placeholder="Parent/Guardian name"
-                placeholderTextColor={Colors.textMuted}
-                autoCapitalize="words"
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Phone Number *</Text>
-              <TextInput
-                style={styles.input}
-                value={parentPhone}
-                onChangeText={setParentPhone}
-                placeholder="(555) 123-4567"
-                placeholderTextColor={Colors.textMuted}
-                keyboardType="phone-pad"
-              />
-            </View>
-          </View>
         </View>
 
         <TouchableOpacity
