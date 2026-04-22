@@ -1,7 +1,14 @@
+import { Hono } from "hono";
+import { handle } from "hono/vercel";
+
+const app = new Hono();
+
+app.get("/", (c) => {
+  return c.json({ status: "ok", message: "API working" });
+});
+
 export const config = {
   runtime: "nodejs",
 };
 
-export default function handler(req, res) {
-  res.status(200).json({ status: "ok", test: "working" });
-}
+export default handle(app);
