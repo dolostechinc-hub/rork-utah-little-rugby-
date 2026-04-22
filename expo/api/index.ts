@@ -1,8 +1,7 @@
-import { handle } from "hono/vercel";
-import app from "../backend/hono";
-
 export const config = {
   runtime: "nodejs",
 };
 
-export default handle(app);
+export default function handler(req, res) {
+  res.status(200).json({ status: "ok", test: "working" });
+}
