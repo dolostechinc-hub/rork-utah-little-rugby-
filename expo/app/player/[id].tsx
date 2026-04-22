@@ -30,7 +30,7 @@ import * as Haptics from 'expo-haptics';
 import { useRegistration, usePlayer } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOrganization } from '@/contexts/OrganizationContext';
-import { uploadPlayerPhoto, debugUploadTest, debugSignedUploadTest } from '@/lib/supabase';
+import { uploadPlayerPhoto, debugUploadTest } from '@/lib/supabase';
 import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
 import WeightRestrictionModal from '@/components/WeightRestrictionModal';
@@ -59,15 +59,24 @@ export default function PlayerDetailScreen() {
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [pendingWeight, setPendingWeight] = useState('');
   const [playUpAgeGroup, setPlayUpAgeGroup] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isRegisteringWeight, setIsRegisteringWeight] = useState(false);
+  const [weightRegistered, setWeightRegistered] = useState(false);
 
   useEffect(() => {
     if (player) {
-      setIsAgeVerified(player.isAgeVerified);
-      setPhotoUri(player.photoUri);
-      setWeight(player.weight);
+      setIsAgeVerified(!!player.isAgeVerified);
+      setPhotoUri(player.photoUri ?? null);
+      setWeight(player.weight ?? '');
       setRestrictionStatus((player as any).restrictionStatus || 'none');
-      if ((player as any).restrictionStatus === 'play_up' && (player as any).calculatedAgeGroup) {
+
+      if (
+        (player as any).restrictionStatus === 'play_up' &&
+        (player as any).calculatedAgeGroup
+      ) {
         setPlayUpAgeGroup(player.ageGroup);
+      } else {
+        setPlayUpAgeGroup(null);
       }
     }
   }, [player]);
@@ -81,14 +90,14 @@ export default function PlayerDetailScreen() {
 
   const handleWeightChange = (newWeight: string) => {
     setWeight(newWeight);
-    
+
     if (newWeight.trim() && player) {
       const restriction = checkWeightRestriction(
         effectiveAgeGroup,
         newWeight,
         player.division
       );
-      
+
       if (restriction.isOverweight && restriction.limit) {
         setPendingWeight(newWeight);
         setShowWeightModal(true);
@@ -101,7 +110,7 @@ export default function PlayerDetailScreen() {
   const handleRestrictionSelect = (status: RestrictionStatus) => {
     setRestrictionStatus(status);
     setShowWeightModal(false);
-    
+
     if (status === 'play_up') {
       const nextAgeGroup = getNextAgeGroup(effectiveAgeGroup);
       if (nextAgeGroup) {
@@ -129,7 +138,6 @@ export default function PlayerDetailScreen() {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     }
     setIsAgeVerified(!isAgeVerified);
-    
   };
 
   const handleTakePhoto = async () => {
@@ -172,10 +180,6 @@ export default function PlayerDetailScreen() {
     }
   };
 
-  const [isUploading, setIsUploading] = useState(false);
-  const [isRegisteringWeight, setIsRegisteringWeight] = useState(false);
-  const [weightRegistered, setWeightRegistered] = useState(false);
-
   const handleWeightBlur = async () => {
     if (!player) return;
     const trimmed = weight.trim();
@@ -186,6 +190,7 @@ export default function PlayerDetailScreen() {
     console.log('Registering weight for player:', player.id, 'weight:', trimmed);
     setIsRegisteringWeight(true);
     setWeightRegistered(false);
+
     try {
       await updatePlayer({
         ...player,
@@ -193,11 +198,14 @@ export default function PlayerDetailScreen() {
         restrictionStatus,
         calculatedAgeGroup: calculatedAgeGroup || undefined,
       });
+
       console.log('Weight registered and synced for player:', player.id);
       setWeightRegistered(true);
+
       if (Platform.OS !== 'web') {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
+
       setTimeout(() => setWeightRegistered(false), 2500);
     } catch (error) {
       console.error('Failed to register weight:', error);
@@ -207,18 +215,19 @@ export default function PlayerDetailScreen() {
   };
 
   const handleSave = async () => {
+    const trimmedWeight = weight.trim();
     const missingFields: string[] = [];
-    
+
     if (!isAgeVerified) {
       missingFields.push('Age Verification');
     }
-    if (!weight.trim()) {
+    if (!trimmedWeight) {
       missingFields.push('Weight');
     }
     if (!photoUri) {
       missingFields.push('Photo');
     }
-    
+
     if (missingFields.length > 0) {
       Alert.alert(
         'Required Fields Missing',
@@ -227,7 +236,7 @@ export default function PlayerDetailScreen() {
       );
       return;
     }
-    
+
     console.log('Saving player check-in:', player.id);
 
     let finalPhotoUri = photoUri;
@@ -236,13 +245,20 @@ export default function PlayerDetailScreen() {
     if (photoUri && !photoUri.startsWith('http')) {
       console.log('Uploading photo to cloud storage...');
       setIsUploading(true);
+
       try {
-        const uploadedUrl = await uploadPlayerPhoto(player.id, photoUri, currentOrg?.id ?? 'utah-little-rugby', 3);
+        const uploadedUrl = await uploadPlayerPhoto(
+          player.id,
+          photoUri,
+          currentOrg?.id ?? 'utah-little-rugby',
+          3
+        );
         console.log('Photo uploaded to cloud successfully:', uploadedUrl);
         finalPhotoUri = uploadedUrl;
         setPhotoUri(uploadedUrl);
       } catch (uploadError) {
-        uploadErrorMessage = uploadError instanceof Error ? uploadError.message : String(uploadError);
+        uploadErrorMessage =
+          uploadError instanceof Error ? uploadError.message : String(uploadError);
         console.error('Photo cloud upload error:', uploadError);
       } finally {
         setIsUploading(false);
@@ -251,16 +267,18 @@ export default function PlayerDetailScreen() {
 
     if (uploadErrorMessage) {
       Alert.alert(
-        'Photo upload failed',
-        `Photo upload failed: ${uploadErrorMessage}`,
+        'PHOTO UPLOAD FAILED V2',
+        uploadErrorMessage,
         [
           { text: 'OK' },
           {
-            text: 'Debug Direct Upload',
+            text: 'Run Debug Test V2',
             onPress: async () => {
-              const result = await debugUploadTest(currentOrg?.id ?? 'utah-little-rugby');
+              const result = await debugUploadTest(
+                currentOrg?.id ?? 'utah-little-rugby'
+              );
               Alert.alert(
-                result.success ? 'Direct upload OK' : 'Direct upload failed',
+                result.success ? 'Debug upload OK' : 'Debug upload failed',
                 [
                   `supabaseUrl: ${result.supabaseUrl ?? '(missing)'}`,
                   `bucket: ${result.bucket}`,
@@ -268,40 +286,13 @@ export default function PlayerDetailScreen() {
                   `size: ${result.size}`,
                   result.url ? `url: ${result.url}` : undefined,
                   result.error ? `error: ${result.error}` : undefined,
-                ].filter(Boolean).join('\n'),
-              );
-            },
-          },
-          {
-            text: 'SIGNED URL DEBUG',
-            onPress: async () => {
-              const r = await debugSignedUploadTest(
-                currentOrg?.id ?? 'utah-little-rugby',
-                player?.id ?? `debug-${Date.now()}`,
-              );
-              Alert.alert(
-                r.signed ? 'Signed URL OK' : 'Signed URL failed',
-                [
-                  `endpoint: ${r.debug.endpoint}`,
-                  `hasEditorSession: ${r.debug.hasEditorSession}`,
-                  r.debug.editorSessionExpiresAt
-                    ? `editorSessionExpiresAt: ${r.debug.editorSessionExpiresAt}`
-                    : undefined,
-                  `hasAdminAuth: ${r.debug.hasAdminAuth}`,
-                  r.debug.status !== null ? `status: ${r.debug.status}` : undefined,
-                  r.debug.networkError ? `networkError: ${r.debug.networkError}` : undefined,
-                  r.debug.responseText
-                    ? `responseText: ${r.debug.responseText.slice(0, 300)}`
-                    : undefined,
-                  r.errorMessage ? `error: ${r.errorMessage}` : undefined,
-                  r.signed ? `path: ${r.signed.path}` : undefined,
                 ]
                   .filter(Boolean)
-                  .join('\n'),
+                  .join('\n')
               );
             },
           },
-        ],
+        ]
       );
       return;
     }
@@ -314,7 +305,7 @@ export default function PlayerDetailScreen() {
         ...player,
         isAgeVerified,
         photoUri: finalPhotoUri,
-        weight,
+        weight: trimmedWeight,
         checkedIn,
         checkedInAt: new Date().toISOString(),
         restrictionStatus,
@@ -363,221 +354,259 @@ export default function PlayerDetailScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
       >
-      <ScrollView
-        ref={scrollRef}
-        style={styles.container}
-        contentContainerStyle={[styles.content, { paddingBottom: 320 }]}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.photoSection}>
-          <View style={styles.debugBuildMarker} testID="debug-build-marker">
-            <Text style={styles.debugBuildMarkerText}>DEBUG BUILD 2026-04-21</Text>
-          </View>
-          <TouchableOpacity
-            style={[
-              styles.photoContainer,
-              !photoUri && styles.photoRequired,
-            ]}
-            onPress={canEdit ? handleTakePhoto : undefined}
-            activeOpacity={canEdit ? 0.8 : 1}
-            disabled={!canEdit}
-          >
-            {photoUri ? (
-              <Image source={{ uri: photoUri }} style={styles.photo} />
-            ) : (
-              <View style={styles.photoPlaceholder}>
-                <User size={48} color={Colors.textMuted} />
-                <Text style={styles.photoRequiredText}>Photo Required</Text>
+        <ScrollView
+          ref={scrollRef}
+          style={styles.container}
+          contentContainerStyle={[styles.content, { paddingBottom: 320 }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.photoSection}>
+            <TouchableOpacity
+              style={[
+                styles.photoContainer,
+                !photoUri && styles.photoRequired,
+              ]}
+              onPress={canEdit ? handleTakePhoto : undefined}
+              activeOpacity={canEdit ? 0.8 : 1}
+              disabled={!canEdit}
+            >
+              {photoUri ? (
+                <Image source={{ uri: photoUri }} style={styles.photo} />
+              ) : (
+                <View style={styles.photoPlaceholder}>
+                  <User size={48} color={Colors.textMuted} />
+                  <Text style={styles.photoRequiredText}>Photo Required</Text>
+                </View>
+              )}
+              <View style={[styles.cameraButton, !photoUri && styles.cameraButtonRequired]}>
+                <Camera size={20} color={Colors.white} />
+              </View>
+            </TouchableOpacity>
+
+            {!photoUri && (
+              <Text style={styles.photoHint}>Tap to take a photo for check-in</Text>
+            )}
+
+            <Text style={styles.playerName}>
+              {player.firstName} {player.lastName}
+            </Text>
+
+            <View style={styles.badges}>
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{player.club}</Text>
+              </View>
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {playUpAgeGroup || calculatedAgeGroup || player.ageGroup}
+                  {playUpAgeGroup && ' ↑'}
+                </Text>
+              </View>
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{player.division}</Text>
+              </View>
+            </View>
+
+            {calculatedAgeGroup && calculatedAgeGroup !== player.ageGroup && !playUpAgeGroup && (
+              <View style={styles.ageGroupNote}>
+                <Text style={styles.ageGroupNoteText}>
+                  Auto-assigned from DOB (was: {player.ageGroup})
+                </Text>
               </View>
             )}
-            <View style={[styles.cameraButton, !photoUri && styles.cameraButtonRequired]}>
-              <Camera size={20} color={Colors.white} />
-            </View>
-          </TouchableOpacity>
-          {!photoUri && (
-            <Text style={styles.photoHint}>Tap to take a photo for check-in</Text>
-          )}
 
-          <Text style={styles.playerName}>
-            {player.firstName} {player.lastName}
-          </Text>
-
-          <View style={styles.badges}>
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{player.club}</Text>
-            </View>
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>
-                {playUpAgeGroup || calculatedAgeGroup || player.ageGroup}
-                {playUpAgeGroup && ' ↑'}
-              </Text>
-            </View>
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{player.division}</Text>
-            </View>
-          </View>
-          {calculatedAgeGroup && calculatedAgeGroup !== player.ageGroup && !playUpAgeGroup && (
-            <View style={styles.ageGroupNote}>
-              <Text style={styles.ageGroupNoteText}>
-                Auto-assigned from DOB (was: {player.ageGroup})
-              </Text>
-            </View>
-          )}
-          {playUpAgeGroup && (
-            <View style={[styles.ageGroupNote, { backgroundColor: '#EDE9FE' }]}>
-              <Text style={[styles.ageGroupNoteText, { color: '#8B5CF6' }]}>
-                Playing up from {effectiveAgeGroup} to {playUpAgeGroup}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Player Details</Text>
-
-          <View style={styles.detailRow}>
-            <Calendar size={18} color={Colors.textSecondary} />
-            <Text style={styles.detailLabel}>Date of Birth</Text>
-            {canEdit ? (
-              <Text style={styles.detailValue}>{player.dateOfBirth || 'Not provided'}</Text>
-            ) : (
-              <Text style={styles.obfuscatedValue}>••••••••••</Text>
+            {playUpAgeGroup && (
+              <View style={[styles.ageGroupNote, { backgroundColor: '#EDE9FE' }]}>
+                <Text style={[styles.ageGroupNoteText, { color: '#8B5CF6' }]}>
+                  Playing up from {effectiveAgeGroup} to {playUpAgeGroup}
+                </Text>
+              </View>
             )}
           </View>
 
-          <View style={styles.detailRow}>
-            <User size={18} color={Colors.textSecondary} />
-            <Text style={styles.detailLabel}>Parent/Guardian</Text>
-            {canEdit ? (
-              <Text style={styles.detailValue}>{player.parentName || 'Not provided'}</Text>
-            ) : (
-              <Text style={styles.obfuscatedValue}>••••••••••</Text>
-            )}
-          </View>
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Player Details</Text>
 
-          <View style={styles.detailRow}>
-            <Phone size={18} color={Colors.textSecondary} />
-            <Text style={styles.detailLabel}>Phone</Text>
-            {canEdit ? (
-              <Text style={styles.detailValue}>{player.parentPhone || 'Not provided'}</Text>
-            ) : (
-              <Text style={styles.obfuscatedValue}>••••••••••</Text>
-            )}
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Check-In Verification</Text>
-
-          <TouchableOpacity
-            style={[styles.verificationCard, isAgeVerified && styles.verificationCardActive, !canEdit && styles.disabledCard]}
-            onPress={canEdit ? handleToggleVerified : undefined}
-            activeOpacity={canEdit ? 0.7 : 1}
-            disabled={!canEdit}
-          >
-            {isAgeVerified ? (
-              <CheckCircle2 size={28} color={Colors.success} />
-            ) : (
-              <Circle size={28} color={Colors.textMuted} />
-            )}
-            <View style={styles.verificationContent}>
-              <Text style={styles.verificationTitle}>Age Verified</Text>
-              <Text style={styles.verificationSubtitle}>
-                {isAgeVerified ? 'Birth certificate or ID confirmed' : 'Tap to confirm age verification'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-
-          <View style={[styles.weightCard, !canEdit && styles.disabledCard]}>
-            <Scale size={22} color={Colors.textSecondary} />
-            <View style={styles.weightContent}>
-              <Text style={styles.weightLabel}>Weight (lbs)</Text>
-              <TextInput
-                ref={weightInputRef}
-                style={styles.weightInput}
-                value={weight}
-                onChangeText={handleWeightChange}
-                onBlur={handleWeightBlur}
-                onFocus={() => {
-                  setTimeout(() => {
-                    scrollRef.current?.scrollToEnd({ animated: true });
-                  }, 250);
-                }}
-                placeholder="Enter weight"
-                placeholderTextColor={Colors.textMuted}
-                keyboardType="numeric"
-                returnKeyType="done"
-                onSubmitEditing={() => Keyboard.dismiss()}
-                editable={canEdit}
-                testID="player-weight-input"
-              />
-              {isRegisteringWeight && (
-                <Text style={styles.weightStatusText}>Saving…</Text>
+            <View style={styles.detailRow}>
+              <Calendar size={18} color={Colors.textSecondary} />
+              <Text style={styles.detailLabel}>Date of Birth</Text>
+              {canEdit ? (
+                <Text style={styles.detailValue}>{player.dateOfBirth || 'Not provided'}</Text>
+              ) : (
+                <Text style={styles.obfuscatedValue}>••••••••••</Text>
               )}
-              {!isRegisteringWeight && weightRegistered && (
-                <Text style={[styles.weightStatusText, { color: Colors.success }]}>Saved</Text>
+            </View>
+
+            <View style={styles.detailRow}>
+              <User size={18} color={Colors.textSecondary} />
+              <Text style={styles.detailLabel}>Parent/Guardian</Text>
+              {canEdit ? (
+                <Text style={styles.detailValue}>{player.parentName || 'Not provided'}</Text>
+              ) : (
+                <Text style={styles.obfuscatedValue}>••••••••••</Text>
+              )}
+            </View>
+
+            <View style={styles.detailRow}>
+              <Phone size={18} color={Colors.textSecondary} />
+              <Text style={styles.detailLabel}>Phone</Text>
+              {canEdit ? (
+                <Text style={styles.detailValue}>{player.parentPhone || 'Not provided'}</Text>
+              ) : (
+                <Text style={styles.obfuscatedValue}>••••••••••</Text>
               )}
             </View>
           </View>
 
-          {restrictionStatus && restrictionStatus !== 'none' && (
-            <View style={[styles.restrictionCard, { borderColor: getRestrictionStatusColor(restrictionStatus) }]}>
-              <AlertTriangle size={20} color={getRestrictionStatusColor(restrictionStatus)} />
-              <View style={styles.restrictionContent}>
-                <Text style={[styles.restrictionTitle, { color: getRestrictionStatusColor(restrictionStatus) }]}>
-                  {getRestrictionStatusLabel(restrictionStatus)}
-                </Text>
-                <Text style={styles.restrictionSubtitle}>
-                  Player is over weight limit for restricted division
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Check-In Verification</Text>
+
+            <TouchableOpacity
+              style={[
+                styles.verificationCard,
+                isAgeVerified && styles.verificationCardActive,
+                !canEdit && styles.disabledCard,
+              ]}
+              onPress={canEdit ? handleToggleVerified : undefined}
+              activeOpacity={canEdit ? 0.7 : 1}
+              disabled={!canEdit}
+            >
+              {isAgeVerified ? (
+                <CheckCircle2 size={28} color={Colors.success} />
+              ) : (
+                <Circle size={28} color={Colors.textMuted} />
+              )}
+              <View style={styles.verificationContent}>
+                <Text style={styles.verificationTitle}>Age Verified</Text>
+                <Text style={styles.verificationSubtitle}>
+                  {isAgeVerified
+                    ? 'Birth certificate or ID confirmed'
+                    : 'Tap to confirm age verification'}
                 </Text>
               </View>
+            </TouchableOpacity>
+
+            <View style={[styles.weightCard, !canEdit && styles.disabledCard]}>
+              <Scale size={22} color={Colors.textSecondary} />
+              <View style={styles.weightContent}>
+                <Text style={styles.weightLabel}>Weight (lbs)</Text>
+                <TextInput
+                  ref={weightInputRef}
+                  style={styles.weightInput}
+                  value={weight}
+                  onChangeText={handleWeightChange}
+                  onBlur={handleWeightBlur}
+                  onFocus={() => {
+                    setTimeout(() => {
+                      scrollRef.current?.scrollToEnd({ animated: true });
+                    }, 250);
+                  }}
+                  placeholder="Enter weight"
+                  placeholderTextColor={Colors.textMuted}
+                  keyboardType="numeric"
+                  returnKeyType="done"
+                  onSubmitEditing={() => Keyboard.dismiss()}
+                  editable={canEdit}
+                  testID="player-weight-input"
+                />
+                {isRegisteringWeight && (
+                  <Text style={styles.weightStatusText}>Saving…</Text>
+                )}
+                {!isRegisteringWeight && weightRegistered && (
+                  <Text style={[styles.weightStatusText, { color: Colors.success }]}>
+                    Saved
+                  </Text>
+                )}
+              </View>
+            </View>
+
+            {restrictionStatus && restrictionStatus !== 'none' && (
+              <View
+                style={[
+                  styles.restrictionCard,
+                  { borderColor: getRestrictionStatusColor(restrictionStatus) },
+                ]}
+              >
+                <AlertTriangle
+                  size={20}
+                  color={getRestrictionStatusColor(restrictionStatus)}
+                />
+                <View style={styles.restrictionContent}>
+                  <Text
+                    style={[
+                      styles.restrictionTitle,
+                      { color: getRestrictionStatusColor(restrictionStatus) },
+                    ]}
+                  >
+                    {getRestrictionStatusLabel(restrictionStatus)}
+                  </Text>
+                  <Text style={styles.restrictionSubtitle}>
+                    Player is over weight limit for restricted division
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.statusSection}>
+            <View
+              style={[
+                styles.statusBanner,
+                isComplete ? styles.statusComplete : styles.statusIncomplete,
+              ]}
+            >
+              {isComplete ? (
+                <CheckCircle2 size={24} color={Colors.success} />
+              ) : (
+                <Circle size={24} color={Colors.warning} />
+              )}
+              <Text
+                style={[
+                  styles.statusText,
+                  isComplete ? styles.statusTextComplete : styles.statusTextIncomplete,
+                ]}
+              >
+                {isComplete ? 'Ready to Check In' : 'Verification Incomplete'}
+              </Text>
+            </View>
+
+            <Text style={styles.statusHint}>
+              {(() => {
+                const missing: string[] = [];
+                if (!isAgeVerified) missing.push('age verification');
+                if (!weight.trim()) missing.push('weight');
+                if (!photoUri) missing.push('photo');
+                if (missing.length === 0) return 'All requirements met';
+                return `Required: ${missing.join(', ')}`;
+              })()}
+            </Text>
+          </View>
+
+          {canEdit ? (
+            <TouchableOpacity
+              style={[styles.saveButton, isComplete && styles.saveButtonComplete]}
+              onPress={handleSave}
+              disabled={isUpdating || isUploading}
+              activeOpacity={0.8}
+            >
+              <Save size={22} color={Colors.white} />
+              <Text style={styles.saveButtonText}>
+                {isUploading
+                  ? 'Uploading Photo...'
+                  : isUpdating
+                    ? 'Syncing...'
+                    : isComplete
+                      ? 'Complete Check-In'
+                      : 'Complete Required Fields'}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.viewOnlyBanner}>
+              <Text style={styles.viewOnlyText}>View-Only Mode</Text>
+              <Text style={styles.viewOnlySubtext}>Go to Settings to unlock admin access</Text>
             </View>
           )}
-        </View>
-
-        <View style={styles.statusSection}>
-          <View style={[styles.statusBanner, isComplete ? styles.statusComplete : styles.statusIncomplete]}>
-            {isComplete ? (
-              <CheckCircle2 size={24} color={Colors.success} />
-            ) : (
-              <Circle size={24} color={Colors.warning} />
-            )}
-            <Text style={[styles.statusText, isComplete ? styles.statusTextComplete : styles.statusTextIncomplete]}>
-              {isComplete ? 'Ready to Check In' : 'Verification Incomplete'}
-            </Text>
-          </View>
-          <Text style={styles.statusHint}>
-            {(() => {
-              const missing: string[] = [];
-              if (!isAgeVerified) missing.push('age verification');
-              if (!weight.trim()) missing.push('weight');
-              if (!photoUri) missing.push('photo');
-              if (missing.length === 0) return 'All requirements met';
-              return `Required: ${missing.join(', ')}`;
-            })()}
-          </Text>
-        </View>
-
-        {canEdit ? (
-          <TouchableOpacity
-            style={[styles.saveButton, isComplete && styles.saveButtonComplete]}
-            onPress={handleSave}
-            disabled={isUpdating || isUploading}
-            activeOpacity={0.8}
-          >
-            <Save size={22} color={Colors.white} />
-            <Text style={styles.saveButtonText}>
-              {isUploading ? 'Uploading Photo...' : isUpdating ? 'Syncing...' : isComplete ? 'Complete Check-In' : 'Complete Required Fields'}
-            </Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.viewOnlyBanner}>
-            <Text style={styles.viewOnlyText}>View-Only Mode</Text>
-            <Text style={styles.viewOnlySubtext}>Go to Settings to unlock admin access</Text>
-          </View>
-        )}
-      </ScrollView>
+        </ScrollView>
       </KeyboardAvoidingView>
 
       {player && (
@@ -587,7 +616,9 @@ export default function PlayerDetailScreen() {
           onSelect={handleRestrictionSelect}
           playerName={`${player.firstName} ${player.lastName}`}
           currentWeight={parseFloat(pendingWeight) || 0}
-          weightLimit={checkWeightRestriction(effectiveAgeGroup, pendingWeight, player.division).limit || 0}
+          weightLimit={
+            checkWeightRestriction(effectiveAgeGroup, pendingWeight, player.division).limit || 0
+          }
           currentAgeGroup={effectiveAgeGroup}
         />
       )}
@@ -631,19 +662,6 @@ const styles = StyleSheet.create({
   photoSection: {
     alignItems: 'center',
     marginBottom: 24,
-  },
-  debugBuildMarker: {
-    backgroundColor: '#FF2D55',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-    marginBottom: 12,
-  },
-  debugBuildMarkerText: {
-    color: '#FFFFFF',
-    fontWeight: '800' as const,
-    fontSize: 12,
-    letterSpacing: 1,
   },
   photoContainer: {
     position: 'relative',

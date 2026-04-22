@@ -1,3 +1,11 @@
 node_modules
 .env
 .expo
+.vercel
+.env*.local
+
+# local temp files
+supabase/.temp/
+expo/supabase/.temp/
+vercel_logs.txt
+expo/utah-little-rugby-2026-regs-*.json
