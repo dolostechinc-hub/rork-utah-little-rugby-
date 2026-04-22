@@ -6,6 +6,12 @@ import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } 
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/AuthContext';
+import {
+  getPlayers as supabaseGetPlayers,
+  updatePlayerCheckIn as supabaseUpdatePlayerCheckIn,
+  subscribeToPlayers as supabaseSubscribeToPlayers,
+} from '@/lib/player-repo';
+import { computeEligibility } from '@/lib/eligibility';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -173,6 +179,30 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       networkMode: 'online',
     }
   );
+
+  // ---------------------------------------------------------------
+  // Supabase-first live query (primary source of truth for volunteers)
+  // ---------------------------------------------------------------
+  const supabasePlayersQuery = useQuery<Player[]>({
+    queryKey: ['supabase-players'],
+    queryFn: async () => {
+      console.log('[RegistrationContext] fetching players from Supabase...');
+      const data = await supabaseGetPlayers({});
+      console.log('[RegistrationContext] Supabase returned', data.length, 'players');
+      return data;
+    },
+    staleTime: 15000,
+    refetchOnWindowFocus: false,
+    retry: 2,
+  });
+
+  useEffect(() => {
+    const unsub = supabaseSubscribeToPlayers(() => {
+      console.log('[RegistrationContext] realtime player change, invalidating');
+      void queryClient.invalidateQueries({ queryKey: ['supabase-players'] });
+    });
+    return () => unsub();
+  }, [queryClient]);
 
   const localPlayersQuery = useQuery({
     queryKey: ['local-players'],
@@ -628,6 +658,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const isConnected = sheetsConfig?.isConnected || false;
   
   const players = useMemo(() => {
+    // Supabase is the primary source for live check-in.
+    if (supabasePlayersQuery.data && supabasePlayersQuery.data.length > 0) {
+      return supabasePlayersQuery.data;
+    }
     if (isConnected && sheetsPlayersQuery.data) {
       return sheetsPlayersQuery.data;
     }
@@ -636,7 +670,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       return localPlayersQuery.data;
     }
     return localPlayersQuery.data || [];
-  }, [isConnected, sheetsPlayersQuery.data, localPlayersQuery.data]);
+  }, [supabasePlayersQuery.data, isConnected, sheetsPlayersQuery.data, localPlayersQuery.data]);
 
   const clubs: Club[] = useMemo(() => {
     const uniqueClubs = new Map<string, Club>();
@@ -802,7 +836,36 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('View-only mode: blocking player update (no edit access)');
       throw new Error('This event is locked. Only the admin or users granted edit access can make changes.');
     }
-    console.log('Saving player update locally first:', player.id, 'photoUri:', player.photoUri ? 'has photo' : 'no photo');
+    console.log('Saving player update:', player.id, 'photoUri:', player.photoUri ? 'has photo' : 'no photo');
+
+    // 1. Live write to Supabase (primary backend for volunteer check-in).
+    try {
+      const eligibility = computeEligibility({
+        dateOfBirth: player.dateOfBirth,
+        ageGroup: player.ageGroup,
+        division: player.division,
+        weightLbs: player.weight,
+        userSelectedRestriction: player.restrictionStatus,
+      });
+
+      const weightNum = parseFloat((player.weight ?? '').toString());
+
+      await supabaseUpdatePlayerCheckIn({
+        playerId: player.id,
+        weightLbs: Number.isFinite(weightNum) ? weightNum : null,
+        isAgeVerified: player.isAgeVerified,
+        restrictionStatus: eligibility.restrictionStatus,
+        calculatedAgeGroup:
+          player.calculatedAgeGroup ?? eligibility.calculatedAgeGroup ?? null,
+        photoUrl: player.photoUri,
+        markCheckedIn: !!player.checkedIn,
+      });
+      void queryClient.invalidateQueries({ queryKey: ['supabase-players'] });
+    } catch (err) {
+      console.warn('[RegistrationContext] Supabase update failed; continuing with local + sheets fallback', err);
+    }
+
+    // 2. Local cache (kept for offline / legacy screens).
     await updateLocalPlayerAsync(player);
 
     if (isConnected && sheetsConfig) {
@@ -1048,6 +1111,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
   const refreshData = useCallback(() => {
     console.log('Manual refresh triggered, isConnected:', isConnected);
+    void queryClient.invalidateQueries({ queryKey: ['supabase-players'] });
     if (isConnected) {
       void trpcUtils.sheets.getPlayers.refetch();
       void trpcUtils.sheets.getMetadata.refetch();
