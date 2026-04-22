@@ -24,6 +24,8 @@ import {
   ArrowLeft,
   Save,
   AlertTriangle,
+  Users,
+  ChevronRight,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -34,6 +36,7 @@ import { uploadPlayerPhoto } from '@/lib/supabase';
 import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
 import WeightRestrictionModal from '@/components/WeightRestrictionModal';
+import TeamAssignmentModal from '@/components/TeamAssignmentModal';
 import {
   calculateAgeGroup,
   checkWeightRestriction,
@@ -46,7 +49,7 @@ export default function PlayerDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const player = usePlayer(id || '');
-  const { updatePlayer, isUpdating } = useRegistration();
+  const { updatePlayer, isUpdating, teams } = useRegistration();
   const { canEdit } = useAuth();
   const { currentOrg } = useOrganization();
 
@@ -62,6 +65,8 @@ export default function PlayerDetailScreen() {
   const [isUploading, setIsUploading] = useState(false);
   const [isRegisteringWeight, setIsRegisteringWeight] = useState(false);
   const [weightRegistered, setWeightRegistered] = useState(false);
+  const [showTeamModal, setShowTeamModal] = useState(false);
+  const [isSavingTeam, setIsSavingTeam] = useState(false);
 
   useEffect(() => {
     if (player) {
@@ -383,6 +388,12 @@ export default function PlayerDetailScreen() {
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{player.division}</Text>
               </View>
+              {player.teamName ? (
+                <View style={[styles.badge, styles.teamBadge]}>
+                  <Users size={12} color={Colors.white} />
+                  <Text style={[styles.badgeText, styles.teamBadgeText]}>{player.teamName}</Text>
+                </View>
+              ) : null}
             </View>
 
             {calculatedAgeGroup && calculatedAgeGroup !== player.ageGroup && !playUpAgeGroup && (
@@ -435,6 +446,32 @@ export default function PlayerDetailScreen() {
               )}
             </View>
           </View>
+
+          {canEdit && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Team Assignment</Text>
+              <TouchableOpacity
+                style={styles.teamCard}
+                onPress={() => setShowTeamModal(true)}
+                activeOpacity={0.7}
+                disabled={isSavingTeam}
+                testID="team-assignment-card"
+              >
+                <Users size={22} color={Colors.primary} />
+                <View style={styles.teamCardContent}>
+                  <Text style={styles.teamCardLabel}>
+                    {player.teamName ? 'Assigned Team' : 'No Team Assigned'}
+                  </Text>
+                  <Text style={styles.teamCardValue}>
+                    {isSavingTeam
+                      ? 'Saving…'
+                      : player.teamName || `Tap to assign (e.g. ${player.club} ${player.ageGroup} Blue)`}
+                  </Text>
+                </View>
+                <ChevronRight size={20} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+          )}
 
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Check-In Verification</Text>
@@ -586,6 +623,48 @@ export default function PlayerDetailScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {player && canEdit && (
+        <TeamAssignmentModal
+          visible={showTeamModal}
+          onClose={() => setShowTeamModal(false)}
+          currentTeamName={player.teamName}
+          playerClub={player.club}
+          playerAgeGroup={playUpAgeGroup || calculatedAgeGroup || player.ageGroup}
+          allTeams={teams}
+          onSelect={async (teamName) => {
+            setShowTeamModal(false);
+            setIsSavingTeam(true);
+            try {
+              console.log('Saving team assignment for player:', player.id, '->', teamName);
+              await updatePlayer({ ...player, teamName });
+              if (Platform.OS !== 'web') {
+                void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              }
+            } catch (error) {
+              console.error('Failed to save team assignment:', error);
+              const message = error instanceof Error ? error.message : 'Unknown error';
+              Alert.alert('Could Not Save Team', message);
+            } finally {
+              setIsSavingTeam(false);
+            }
+          }}
+          onClear={async () => {
+            setShowTeamModal(false);
+            setIsSavingTeam(true);
+            try {
+              console.log('Clearing team assignment for player:', player.id);
+              await updatePlayer({ ...player, teamName: '' });
+            } catch (error) {
+              console.error('Failed to clear team assignment:', error);
+              const message = error instanceof Error ? error.message : 'Unknown error';
+              Alert.alert('Could Not Clear Team', message);
+            } finally {
+              setIsSavingTeam(false);
+            }
+          }}
+        />
+      )}
 
       {player && (
         <WeightRestrictionModal
@@ -883,6 +962,40 @@ const styles = StyleSheet.create({
   viewOnlySubtext: {
     fontSize: 13,
     color: Colors.textMuted,
+  },
+  teamBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.primary,
+  },
+  teamBadgeText: {
+    color: Colors.white,
+  },
+  teamCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 12,
+  },
+  teamCardContent: {
+    flex: 1,
+  },
+  teamCardLabel: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  teamCardValue: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.text,
   },
   ageGroupNote: {
     marginTop: 8,
