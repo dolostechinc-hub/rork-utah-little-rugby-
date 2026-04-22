@@ -753,20 +753,28 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const filteredPlayers = useMemo(() => {
     let result = players;
 
+    const normalizeStr = (s: string | undefined | null) => (s || '').toString().trim().toLowerCase();
+    const normalizeAge = (s: string | undefined | null) =>
+      (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
+
     if (filters.club) {
-      result = result.filter(p => p.club === filters.club);
+      const target = normalizeStr(filters.club);
+      result = result.filter(p => normalizeStr(p.club) === target);
     }
     if (filters.ageGroup) {
+      const target = normalizeAge(filters.ageGroup);
       result = result.filter(p => {
-        const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup;
-        return effectiveAgeGroup === filters.ageGroup;
+        const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup || '';
+        return normalizeAge(effectiveAgeGroup) === target;
       });
     }
     if (filters.division) {
-      result = result.filter(p => p.division === filters.division);
+      const target = normalizeStr(filters.division);
+      result = result.filter(p => normalizeStr(p.division) === target);
     }
     if (filters.teamName) {
-      result = result.filter(p => p.teamName === filters.teamName);
+      const target = normalizeStr(filters.teamName);
+      result = result.filter(p => normalizeStr(p.teamName) === target);
     }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
