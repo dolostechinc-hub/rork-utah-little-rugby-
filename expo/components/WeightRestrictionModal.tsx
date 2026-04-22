@@ -76,7 +76,7 @@ export default function WeightRestrictionModal({
                 <Coins size={24} color="#F59E0B" />
               </View>
               <View style={styles.optionContent}>
-                <Text style={styles.optionTitle}>Penny Player</Text>
+                <Text style={styles.optionTitle}>Pennie Player</Text>
                 <Text style={styles.optionDescription}>
                   Touch only - no tackling allowed
                 </Text>

@@ -55,6 +55,7 @@ export default function PlayerDetailScreen() {
 
   const scrollRef = useRef<ScrollView | null>(null);
   const weightInputRef = useRef<TextInput | null>(null);
+  const initializedForIdRef = useRef<string | null>(null);
   const [isAgeVerified, setIsAgeVerified] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [weight, setWeight] = useState('');
@@ -69,20 +70,25 @@ export default function PlayerDetailScreen() {
   const [isSavingTeam, setIsSavingTeam] = useState(false);
 
   useEffect(() => {
-    if (player) {
-      setIsAgeVerified(!!player.isAgeVerified);
-      setPhotoUri(player.photoUri ?? null);
-      setWeight(player.weight ?? '');
-      setRestrictionStatus((player as any).restrictionStatus || 'none');
+    if (!player) return;
+    // Only seed local state the first time we see this player. Subsequent
+    // updates to the player record (e.g. after saving weight) must not wipe
+    // out in-progress local edits like photo or age verification toggle.
+    if (initializedForIdRef.current === player.id) return;
+    initializedForIdRef.current = player.id;
 
-      if (
-        (player as any).restrictionStatus === 'play_up' &&
-        (player as any).calculatedAgeGroup
-      ) {
-        setPlayUpAgeGroup(player.ageGroup);
-      } else {
-        setPlayUpAgeGroup(null);
-      }
+    setIsAgeVerified(!!player.isAgeVerified);
+    setPhotoUri(player.photoUri ?? null);
+    setWeight(player.weight ?? '');
+    setRestrictionStatus((player as any).restrictionStatus || 'none');
+
+    if (
+      (player as any).restrictionStatus === 'play_up' &&
+      (player as any).calculatedAgeGroup
+    ) {
+      setPlayUpAgeGroup(player.ageGroup);
+    } else {
+      setPlayUpAgeGroup(null);
     }
   }, [player]);
 
@@ -199,6 +205,10 @@ export default function PlayerDetailScreen() {
     try {
       await updatePlayer({
         ...player,
+        // Preserve any in-progress local edits so saving the weight does not
+        // wipe out a freshly taken photo or the age verification toggle.
+        isAgeVerified,
+        photoUri: photoUri ?? player.photoUri,
         weight: trimmed,
         restrictionStatus,
         calculatedAgeGroup: calculatedAgeGroup || undefined,

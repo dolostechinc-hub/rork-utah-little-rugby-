@@ -107,7 +107,7 @@ export function getNextAgeGroup(currentAgeGroup: string): string | null {
 export function getRestrictionStatusLabel(status: RestrictionStatus): string {
   switch (status) {
     case 'penny_player':
-      return 'Penny Player (Touch Only)';
+      return 'Pennie Player (Touch Only)';
     case 'play_up':
       return 'Playing Up';
     case 'open_division':

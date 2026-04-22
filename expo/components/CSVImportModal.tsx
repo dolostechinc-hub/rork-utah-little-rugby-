@@ -50,13 +50,13 @@ export interface ParsedPlayer {
 type ImportStep = 'source' | 'select' | 'googleSheets' | 'mapping' | 'preview' | 'importing' | 'complete';
 type ImportSource = 'csv' | 'googleSheets';
 
-const REQUIRED_FIELDS = ['firstName', 'lastName', 'club', 'ageGroup', 'division'];
+const REQUIRED_FIELDS = ['firstName', 'lastName', 'club', 'ageGroup'];
 const ALL_FIELDS: { key: keyof ParsedPlayer; label: string; required: boolean }[] = [
   { key: 'firstName', label: 'First Name', required: true },
   { key: 'lastName', label: 'Last Name', required: true },
   { key: 'club', label: 'Club', required: true },
   { key: 'ageGroup', label: 'Age Group', required: true },
-  { key: 'division', label: 'Division', required: true },
+  { key: 'division', label: 'Division', required: false },
   { key: 'teamName', label: 'Team Name', required: false },
   { key: 'dateOfBirth', label: 'Date of Birth', required: false },
   { key: 'parentName', label: 'Parent Name', required: false },
@@ -344,7 +344,12 @@ export default function CSVImportModal({
       lastName: row[columnMapping.lastName] || '',
       club: row[columnMapping.club] || '',
       ageGroup: row[columnMapping.ageGroup] || '',
-      division: row[columnMapping.division] || '',
+      // Default to Restricted when division is missing from the sheet.
+      // Admins can update this later via the spreadsheet or in-app.
+      division:
+        (columnMapping.division !== undefined && row[columnMapping.division]?.trim())
+          ? row[columnMapping.division]
+          : 'Restricted',
       teamName: columnMapping.teamName !== undefined ? row[columnMapping.teamName] || '' : '',
       dateOfBirth: columnMapping.dateOfBirth !== undefined ? row[columnMapping.dateOfBirth] || '' : '',
       parentName: columnMapping.parentName !== undefined ? row[columnMapping.parentName] || '' : '',

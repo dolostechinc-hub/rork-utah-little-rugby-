@@ -1436,7 +1436,7 @@ export default function SettingsScreen() {
                 <Coins size={16} color="#F59E0B" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={styles.rulesOptionLabel}>Penny Player</Text>
+                <Text style={styles.rulesOptionLabel}>Pennie Player</Text>
                 <Text style={styles.rulesOptionDesc}>Touch only — no tackling allowed</Text>
               </View>
             </View>
