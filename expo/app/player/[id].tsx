@@ -30,7 +30,7 @@ import * as Haptics from 'expo-haptics';
 import { useRegistration, usePlayer } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOrganization } from '@/contexts/OrganizationContext';
-import { uploadPlayerPhoto, debugUploadTest } from '@/lib/supabase';
+import { uploadPlayerPhoto } from '@/lib/supabase';
 import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
 import WeightRestrictionModal from '@/components/WeightRestrictionModal';
@@ -267,32 +267,10 @@ export default function PlayerDetailScreen() {
 
     if (uploadErrorMessage) {
       Alert.alert(
-        'PHOTO UPLOAD FAILED V2',
-        uploadErrorMessage,
-        [
-          { text: 'OK' },
-          {
-            text: 'Run Debug Test V2',
-            onPress: async () => {
-              const result = await debugUploadTest(
-                currentOrg?.id ?? 'utah-little-rugby'
-              );
-              Alert.alert(
-                result.success ? 'Debug upload OK' : 'Debug upload failed',
-                [
-                  `supabaseUrl: ${result.supabaseUrl ?? '(missing)'}`,
-                  `bucket: ${result.bucket}`,
-                  `path: ${result.path}`,
-                  `size: ${result.size}`,
-                  result.url ? `url: ${result.url}` : undefined,
-                  result.error ? `error: ${result.error}` : undefined,
-                ]
-                  .filter(Boolean)
-                  .join('\n')
-              );
-            },
-          },
-        ]
+        'Photo Upload Failed',
+        'Could not upload the photo to cloud storage. Please check your internet connection and try again.\n\nDetails:\n' +
+          uploadErrorMessage,
+        [{ text: 'OK' }]
       );
       return;
     }
