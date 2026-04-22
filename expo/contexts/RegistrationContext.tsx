@@ -6,12 +6,11 @@ import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } 
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import {
   getPlayers as supabaseGetPlayers,
-  updatePlayerCheckIn as supabaseUpdatePlayerCheckIn,
   subscribeToPlayers as supabaseSubscribeToPlayers,
 } from '@/lib/player-repo';
-import { computeEligibility } from '@/lib/eligibility';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -836,68 +835,59 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('View-only mode: blocking player update (no edit access)');
       throw new Error('This event is locked. Only the admin or users granted edit access can make changes.');
     }
-    console.log('Saving player update:', player.id, 'photoUri:', player.photoUri ? 'has photo' : 'no photo');
 
-    // 1. Live write to Supabase (primary backend for volunteer check-in).
-    try {
-      const eligibility = computeEligibility({
-        dateOfBirth: player.dateOfBirth,
-        ageGroup: player.ageGroup,
-        division: player.division,
-        weightLbs: player.weight,
-        userSelectedRestriction: player.restrictionStatus,
-      });
+    console.log(
+      'Saving player update locally first:',
+      player.id,
+      'photoUri:',
+      player.photoUri ? 'has photo' : 'no photo'
+    );
 
-      const weightNum = parseFloat((player.weight ?? '').toString());
-
-      await supabaseUpdatePlayerCheckIn({
-        playerId: player.id,
-        weightLbs: Number.isFinite(weightNum) ? weightNum : null,
-        isAgeVerified: player.isAgeVerified,
-        restrictionStatus: eligibility.restrictionStatus,
-        calculatedAgeGroup:
-          player.calculatedAgeGroup ?? eligibility.calculatedAgeGroup ?? null,
-        photoUrl: player.photoUri,
-        markCheckedIn: !!player.checkedIn,
-      });
-      void queryClient.invalidateQueries({ queryKey: ['supabase-players'] });
-    } catch (err) {
-      console.warn('[RegistrationContext] Supabase update failed; continuing with local + sheets fallback', err);
-    }
-
-    // 2. Local cache (kept for offline / legacy screens).
     await updateLocalPlayerAsync(player);
 
-    if (isConnected && sheetsConfig) {
-      const queryKey = [
-        ['sheets', 'getPlayers'],
-        { input: { spreadsheetId: sheetsConfig.spreadsheetId, sheetName: sheetsConfig.sheetName }, type: 'query' },
-      ];
-      queryClient.setQueryData(queryKey, (old: Player[] | undefined) => {
-        if (!old) return old;
-        const exists = old.some(p => p.id === player.id);
-        if (exists) {
-          return old.map(p => p.id === player.id ? player : p);
-        }
-        return [...old, player];
-      });
+    try {
+      const { error } = await supabase
+        .from('players')
+        .upsert([player], { onConflict: 'id' });
 
+      if (error) {
+        console.error('Supabase player upsert failed:', error);
+      } else {
+        console.log('Player update synced to Supabase successfully:', player.id);
+      }
+    } catch (error) {
+      console.error('Supabase player upsert crashed:', error);
+    }
+
+    if (isConnected && sheetsConfig) {
       console.log('Syncing player update to Google Sheets in background:', player.id);
-      updateSheetsPlayerAsync({
-        spreadsheetId: sheetsConfig.spreadsheetId,
-        sheetName: sheetsConfig.sheetName,
-        player,
-      }).then(() => {
+
+      try {
+        await updateSheetsPlayerAsync({
+          spreadsheetId: sheetsConfig.spreadsheetId,
+          sheetName: sheetsConfig.sheetName,
+          player,
+        });
         console.log('Player update synced to Sheets successfully');
-      }).catch((error) => {
+      } catch (error) {
         console.error('Direct Sheets sync failed, queuing for retry:', error);
-        void addToWriteQueue(player, 'update');
-      });
+        await addToWriteQueue(player, 'update');
+      }
     } else if (savedSheetInfo) {
       console.log('Not connected but have saved sheet - queuing write for next sync');
       await addToWriteQueue(player, 'update');
     }
-  }, [eventMode, canEdit, isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient]);
+  }, [
+    eventMode,
+    canEdit,
+    isConnected,
+    sheetsConfig,
+    savedSheetInfo,
+    updateSheetsPlayerAsync,
+    updateLocalPlayerAsync,
+    addToWriteQueue,
+    queryClient,
+  ]);
 
   const { mutateAsync: addSheetsPlayer } = addSheetsMutation;
   const { mutateAsync: addLocalPlayerAsync } = addLocalMutation;
