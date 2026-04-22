@@ -6,6 +6,13 @@ import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } 
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/AuthContext';
+import { useOrganization } from '@/contexts/OrganizationContext';
+import {
+  loadCachedRegistry,
+  fetchRegistryFromRemote,
+  markPlayerAgeVerified,
+  normalizeVerificationKey,
+} from '@/lib/ageVerifiedRegistry';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -58,6 +65,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const trpcUtils = trpc.useUtils();
   // eslint-disable-next-line rork/general-context-optimization
   const { canEdit, isAdmin } = useAuth();
+  // eslint-disable-next-line rork/general-context-optimization
+  const { currentOrg } = useOrganization();
+  const orgIdForRegistry = currentOrg?.id ?? 'utah-little-rugby';
+  const [verifiedRegistry, setVerifiedRegistry] = useState<Set<string>>(new Set());
+  const verifiedRegistryRef = (useState(() => ({ current: new Set<string>() }))[0]);
   const [filters, setFilters] = useState<RegistrationFilters>({
     club: null,
     ageGroup: null,
@@ -137,6 +149,29 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     };
     void loadConfig();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      const cached = await loadCachedRegistry(orgIdForRegistry);
+      if (cancelled) return;
+      if (cached.size > 0) {
+        console.log('[registry] hydrated from cache:', cached.size);
+        verifiedRegistryRef.current = cached;
+        setVerifiedRegistry(cached);
+      }
+      const remote = await fetchRegistryFromRemote(orgIdForRegistry);
+      if (cancelled) return;
+      if (remote.size > 0 || cached.size === 0) {
+        verifiedRegistryRef.current = remote;
+        setVerifiedRegistry(remote);
+      }
+    };
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgIdForRegistry, verifiedRegistryRef]);
 
   const sheetsPlayersQuery = trpc.sheets.getPlayers.useQuery(
     { 
@@ -398,14 +433,24 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
           existingPlayerMap.delete(key); // Remove from map so we don't add it again if it appears twice in import
           duplicatesKept++;
         } else {
-          // New player - add with new ID
+          // New player - add with new ID. If the player has been age-verified
+          // in a previous season (exists in the registry), pre-fill that flag
+          // so they don't have to bring docs again.
+          const registryKey = normalizeVerificationKey(
+            importedPlayer.firstName,
+            importedPlayer.lastName,
+            importedPlayer.dateOfBirth
+          );
+          const previouslyVerified =
+            !!registryKey && verifiedRegistryRef.current.has(registryKey);
           resultPlayers.push({
             ...importedPlayer,
             id: `imported-${Date.now()}-${index}`,
             teamName: importedPlayer.teamName ?? '',
             checkedIn: importedPlayer.checkedIn ?? false,
             checkedInAt: importedPlayer.checkedInAt ?? null,
-            isAgeVerified: importedPlayer.isAgeVerified ?? false,
+            isAgeVerified:
+              importedPlayer.isAgeVerified ?? previouslyVerified ?? false,
             photoUri: importedPlayer.photoUri ?? null,
             // Ensure default values
             weight: importedPlayer.weight || '',
@@ -626,6 +671,15 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   }, [queryClient]);
 
   const isConnected = sheetsConfig?.isConnected || false;
+
+  const isPreviouslyAgeVerified = useCallback(
+    (firstName: string, lastName: string, dateOfBirth: string): boolean => {
+      const key = normalizeVerificationKey(firstName, lastName, dateOfBirth);
+      if (!key) return false;
+      return verifiedRegistry.has(key);
+    },
+    [verifiedRegistry]
+  );
   
   const players = useMemo(() => {
     if (isConnected && sheetsPlayersQuery.data) {
@@ -813,6 +867,21 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     console.log('Saving player update locally first:', player.id, 'photoUri:', player.photoUri ? 'has photo' : 'no photo');
     await updateLocalPlayerAsync(player);
 
+    if (player.isAgeVerified && player.dateOfBirth) {
+      const key = normalizeVerificationKey(
+        player.firstName,
+        player.lastName,
+        player.dateOfBirth
+      );
+      if (key && !verifiedRegistryRef.current.has(key)) {
+        verifiedRegistryRef.current.add(key);
+        setVerifiedRegistry(new Set(verifiedRegistryRef.current));
+        void markPlayerAgeVerified(orgIdForRegistry, player).catch((err) =>
+          console.warn('Failed to mark age verified in registry:', err)
+        );
+      }
+    }
+
     if (isConnected && sheetsConfig) {
       const queryKey = [
         ['sheets', 'getPlayers'],
@@ -842,7 +911,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Not connected but have saved sheet - queuing write for next sync');
       await addToWriteQueue(player, 'update');
     }
-  }, [eventMode, canEdit, isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient]);
+  }, [eventMode, canEdit, isConnected, sheetsConfig, savedSheetInfo, updateSheetsPlayerAsync, updateLocalPlayerAsync, addToWriteQueue, queryClient, orgIdForRegistry, verifiedRegistryRef]);
 
   const { mutateAsync: addSheetsPlayer } = addSheetsMutation;
   const { mutateAsync: addLocalPlayerAsync } = addLocalMutation;
@@ -855,6 +924,21 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     const result = await addLocalPlayerAsync(newPlayer);
     const addedPlayer = result.newPlayer;
     console.log('Player added locally:', addedPlayer.id);
+
+    if (addedPlayer.isAgeVerified && addedPlayer.dateOfBirth) {
+      const key = normalizeVerificationKey(
+        addedPlayer.firstName,
+        addedPlayer.lastName,
+        addedPlayer.dateOfBirth
+      );
+      if (key && !verifiedRegistryRef.current.has(key)) {
+        verifiedRegistryRef.current.add(key);
+        setVerifiedRegistry(new Set(verifiedRegistryRef.current));
+        void markPlayerAgeVerified(orgIdForRegistry, addedPlayer).catch((err) =>
+          console.warn('Failed to mark new player age verified:', err)
+        );
+      }
+    }
 
     if (isConnected && sheetsConfig) {
       try {
@@ -875,7 +959,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       await addToWriteQueue(addedPlayer, 'add');
     }
     return addedPlayer;
-  }, [eventMode, canEdit, isConnected, sheetsConfig, savedSheetInfo, addSheetsPlayer, addLocalPlayerAsync, addToWriteQueue]);
+  }, [eventMode, canEdit, isConnected, sheetsConfig, savedSheetInfo, addSheetsPlayer, addLocalPlayerAsync, addToWriteQueue, orgIdForRegistry, verifiedRegistryRef]);
 
   const setEventMode = useCallback(async (mode: EventMode) => {
     if (!isAdmin) {
@@ -891,8 +975,18 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
   const importPlayers = useCallback(async (playersToImport: Omit<Player, 'id'>[]) => {
     console.log('Importing players:', playersToImport.length);
+    // Ensure we have the freshest registry so imports pre-fill age verification correctly.
+    try {
+      const fresh = await fetchRegistryFromRemote(orgIdForRegistry);
+      if (fresh.size > 0) {
+        verifiedRegistryRef.current = fresh;
+        setVerifiedRegistry(fresh);
+      }
+    } catch (err) {
+      console.warn('Registry refresh before import failed (continuing):', err);
+    }
     await importPlayersAsync(playersToImport);
-  }, [importPlayersAsync]);
+  }, [importPlayersAsync, orgIdForRegistry, verifiedRegistryRef]);
 
     const importPlayersWithOrgCheck = useCallback(async (
     playersToImport: Omit<Player, 'id'>[],
@@ -960,14 +1054,22 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         existingPlayerMap.delete(key);
         duplicatesKept++;
       } else {
-        // New player
+        // New player - carry over age-verified status from registry if present
+        const registryKey = normalizeVerificationKey(
+          importedPlayer.firstName,
+          importedPlayer.lastName,
+          importedPlayer.dateOfBirth
+        );
+        const previouslyVerified =
+          !!registryKey && verifiedRegistryRef.current.has(registryKey);
         resultPlayers.push({
           ...importedPlayer,
           id: `imported-${Date.now()}-${index}`,
           teamName: importedPlayer.teamName ?? '',
           checkedIn: importedPlayer.checkedIn ?? false,
           checkedInAt: importedPlayer.checkedInAt ?? null,
-          isAgeVerified: importedPlayer.isAgeVerified ?? false,
+          isAgeVerified:
+            importedPlayer.isAgeVerified ?? previouslyVerified ?? false,
           photoUri: importedPlayer.photoUri ?? null,
         });
         newPlayersAdded++;
@@ -1131,6 +1233,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     processPendingWrites,
     eventMode,
     setEventMode,
+    isPreviouslyAgeVerified,
+    verifiedRegistryCount: verifiedRegistry.size,
   }), [
     players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
     updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
@@ -1144,6 +1248,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     getSheetByAccessCode, toggleSheetLock, toggleSheetEditing,
     pendingWriteCount, syncErrors, processPendingWrites,
     eventMode, setEventMode,
+    isPreviouslyAgeVerified, verifiedRegistry,
   ]);
 });
 

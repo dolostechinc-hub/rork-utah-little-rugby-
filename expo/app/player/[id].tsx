@@ -49,7 +49,7 @@ export default function PlayerDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const player = usePlayer(id || '');
-  const { updatePlayer, isUpdating, teams } = useRegistration();
+  const { updatePlayer, isUpdating, teams, isPreviouslyAgeVerified } = useRegistration();
   const { canEdit } = useAuth();
   const { currentOrg } = useOrganization();
 
@@ -76,8 +76,14 @@ export default function PlayerDetailScreen() {
     // out in-progress local edits like photo or age verification toggle.
     if (initializedForIdRef.current === player.id) return;
     initializedForIdRef.current = player.id;
+    // registry hit is used below when seeding isAgeVerified
 
-    setIsAgeVerified(!!player.isAgeVerified);
+    const registryVerified = isPreviouslyAgeVerified(
+      player.firstName,
+      player.lastName,
+      player.dateOfBirth
+    );
+    setIsAgeVerified(!!player.isAgeVerified || registryVerified);
     setPhotoUri(player.photoUri ?? null);
     setWeight(player.weight ?? '');
     setRestrictionStatus((player as any).restrictionStatus || 'none');
@@ -504,9 +510,15 @@ export default function PlayerDetailScreen() {
               <View style={styles.verificationContent}>
                 <Text style={styles.verificationTitle}>Age Verified</Text>
                 <Text style={styles.verificationSubtitle}>
-                  {isAgeVerified
-                    ? 'Birth certificate or ID confirmed'
-                    : 'Tap to confirm age verification'}
+                  {isPreviouslyAgeVerified(
+                    player.firstName,
+                    player.lastName,
+                    player.dateOfBirth
+                  )
+                    ? 'Verified in a previous season — no docs needed'
+                    : isAgeVerified
+                      ? 'Birth certificate or ID confirmed'
+                      : 'Tap to confirm age verification'}
                 </Text>
               </View>
             </TouchableOpacity>
