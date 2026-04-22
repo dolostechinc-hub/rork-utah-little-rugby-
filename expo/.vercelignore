@@ -1,0 +1,16 @@
+android
+ios
+assets
+app
+components
+constants
+contexts
+mocks
+types
+utils
+supabase
+lib
+node_modules
+.expo
+dist
+web-build

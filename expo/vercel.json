@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install --no-audit --no-fund --legacy-peer-deps",
+  "buildCommand": "echo 'no build'",
+  "outputDirectory": "public",
+  "rewrites": [
+    { "source": "/", "destination": "/api" },
+    { "source": "/api/:path*", "destination": "/api" }
+  ]
+}
