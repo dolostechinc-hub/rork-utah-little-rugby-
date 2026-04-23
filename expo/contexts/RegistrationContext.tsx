@@ -24,6 +24,7 @@ const SHEETS_CONFIG_KEY = 'google_sheets_config';
 const SAVED_SHEET_URL_KEY = 'saved_google_sheet_url';
 const IMPORTED_SHEETS_KEY = 'imported_sheets_history';
 const EVENT_MODE_KEY = 'event_mode';
+const SHOW_TEAM_ASSIGNMENT_KEY = 'show_team_assignment';
 
 export type EventMode = 'registration' | 'viewOnly';
 
@@ -84,6 +85,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const [pendingWrites, setPendingWrites] = useState<PendingWrite[]>([]);
   const [syncErrors, setSyncErrors] = useState<string[]>([]);
   const [eventMode, setEventModeState] = useState<EventMode>('registration');
+  const [showTeamAssignment, setShowTeamAssignmentState] = useState<boolean>(false);
   
   // Persisted metadata from imports
   const [importedClubs, setImportedClubs] = useState<Club[]>([]);
@@ -97,18 +99,24 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        const [storedConfig, storedMeta, storedSheetInfo, storedImportedSheets, storedQueue, storedEventMode] = await Promise.all([
+        const [storedConfig, storedMeta, storedSheetInfo, storedImportedSheets, storedQueue, storedEventMode, storedShowTeam] = await Promise.all([
           AsyncStorage.getItem(SHEETS_CONFIG_KEY),
           AsyncStorage.getItem('imported_metadata'),
           AsyncStorage.getItem(SAVED_SHEET_URL_KEY),
           AsyncStorage.getItem(IMPORTED_SHEETS_KEY),
           AsyncStorage.getItem(WRITE_QUEUE_KEY),
           AsyncStorage.getItem(EVENT_MODE_KEY),
+          AsyncStorage.getItem(SHOW_TEAM_ASSIGNMENT_KEY),
         ]);
 
         if (storedEventMode === 'viewOnly' || storedEventMode === 'registration') {
           setEventModeState(storedEventMode);
           console.log('Loaded event mode:', storedEventMode);
+        }
+
+        if (storedShowTeam === 'true') {
+          setShowTeamAssignmentState(true);
+          console.log('Loaded showTeamAssignment: true');
         }
         
         if (storedConfig) {
@@ -971,6 +979,15 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     await AsyncStorage.setItem(EVENT_MODE_KEY, mode);
   }, [isAdmin]);
 
+  const setShowTeamAssignment = useCallback(async (value: boolean) => {
+    if (!isAdmin) {
+      throw new Error('Only the admin can change this setting.');
+    }
+    console.log('Setting showTeamAssignment to:', value);
+    setShowTeamAssignmentState(value);
+    await AsyncStorage.setItem(SHOW_TEAM_ASSIGNMENT_KEY, value ? 'true' : 'false');
+  }, [isAdmin]);
+
   const { mutateAsync: importPlayersAsync } = importPlayersMutation;
 
   const importPlayers = useCallback(async (playersToImport: Omit<Player, 'id'>[]) => {
@@ -1233,6 +1250,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     processPendingWrites,
     eventMode,
     setEventMode,
+    showTeamAssignment,
+    setShowTeamAssignment,
     isPreviouslyAgeVerified,
     verifiedRegistryCount: verifiedRegistry.size,
   }), [
@@ -1248,6 +1267,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     getSheetByAccessCode, toggleSheetLock, toggleSheetEditing,
     pendingWriteCount, syncErrors, processPendingWrites,
     eventMode, setEventMode,
+    showTeamAssignment, setShowTeamAssignment,
     isPreviouslyAgeVerified, verifiedRegistry,
   ]);
 });

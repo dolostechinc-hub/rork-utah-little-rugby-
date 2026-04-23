@@ -550,6 +550,41 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     await saveData(newData);
   }, [orgData, saveData]);
 
+  const leaveOrg = useCallback(async (orgId: string): Promise<boolean> => {
+    console.log('Leaving organization:', orgId);
+    const org = orgData.organizations.find(o => o.id === orgId);
+    if (!org) {
+      console.log('Organization not found:', orgId);
+      return false;
+    }
+
+    const newData: OrgData = {
+      ...orgData,
+      organizations: orgData.organizations.filter(o => o.id !== orgId),
+      members: orgData.members.filter(m => m.orgId !== orgId),
+      teams: orgData.teams.filter(t => t.orgId !== orgId),
+      events: orgData.events.filter(e => e.orgId !== orgId),
+      eventTeams: orgData.eventTeams.filter(et => {
+        const team = orgData.teams.find(t => t.id === et.teamId);
+        return team?.orgId !== orgId;
+      }),
+    };
+
+    await saveData(newData);
+
+    if (currentOrgId === orgId) {
+      const remaining = newData.organizations;
+      if (remaining.length > 0) {
+        await selectOrg(remaining[0].id);
+      } else {
+        await selectOrg(null);
+      }
+    }
+
+    console.log('Left organization successfully:', orgId);
+    return true;
+  }, [orgData, saveData, currentOrgId, selectOrg]);
+
   const deleteOrg = useCallback(async (orgId: string): Promise<boolean> => {
     console.log('Deleting organization:', orgId);
     const org = orgData.organizations.find(o => o.id === orgId);
@@ -1024,6 +1059,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     updateTeam,
     deleteTeam,
     deleteOrg,
+    leaveOrg,
     createEvent,
     updateEvent,
     deleteEvent,
@@ -1052,7 +1088,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     selectOrg, selectEvent, createOrg, updateOrg, joinOrgByCode,
     createTeam, createTeamsBulk, clearOrgTeams, getOrgByName,
     shouldOverwriteOrgData, importTeamsWithOrgCheck, updateTeam, deleteTeam,
-    deleteOrg, createEvent, updateEvent, deleteEvent, addTeamToEvent,
+    deleteOrg, leaveOrg, createEvent, updateEvent, deleteEvent, addTeamToEvent,
     removeTeamFromEvent, createVerification, updateVerification,
     getMemberRole, updateMemberRole, removeMember, getOrgMembers,
     getOrgPrivacySettings, updateOrgPrivacySettings, createVerificationPass,

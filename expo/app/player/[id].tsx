@@ -48,7 +48,7 @@ export default function PlayerDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const player = usePlayer(id || '');
-  const { updatePlayer, isUpdating, teams, isPreviouslyAgeVerified } = useRegistration();
+  const { updatePlayer, isUpdating, teams, isPreviouslyAgeVerified, showTeamAssignment } = useRegistration();
   const { canEdit } = useAuth();
   const { currentOrg } = useOrganization();
 
@@ -403,7 +403,7 @@ export default function PlayerDetailScreen() {
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{player.division}</Text>
               </View>
-              {player.teamName ? (
+              {player.teamName && showTeamAssignment ? (
                 <View style={[styles.badge, styles.teamBadge]}>
                   <Users size={12} color={Colors.white} />
                   <Text style={[styles.badgeText, styles.teamBadgeText]}>{player.teamName}</Text>
@@ -443,7 +443,7 @@ export default function PlayerDetailScreen() {
 
           </View>
 
-          {canEdit && (
+          {canEdit && showTeamAssignment && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Team Assignment</Text>
               <TouchableOpacity
@@ -538,11 +538,20 @@ export default function PlayerDetailScreen() {
             </View>
 
             {restrictionStatus && restrictionStatus !== 'none' && (
-              <View
+              <TouchableOpacity
                 style={[
                   styles.restrictionCard,
                   { borderColor: getRestrictionStatusColor(restrictionStatus) },
                 ]}
+                activeOpacity={canEdit ? 0.7 : 1}
+                disabled={!canEdit}
+                onPress={() => {
+                  if (!canEdit) return;
+                  const currentWeight = weight.trim() || player.weight || '';
+                  setPendingWeight(currentWeight);
+                  setShowWeightModal(true);
+                }}
+                testID="restriction-reselect"
               >
                 <AlertTriangle
                   size={20}
@@ -558,10 +567,13 @@ export default function PlayerDetailScreen() {
                     {getRestrictionStatusLabel(restrictionStatus)}
                   </Text>
                   <Text style={styles.restrictionSubtitle}>
-                    Player is over weight limit for restricted division
+                    {canEdit
+                      ? 'Tap to change this selection'
+                      : 'Player is over weight limit for restricted division'}
                   </Text>
                 </View>
-              </View>
+                {canEdit && <ChevronRight size={18} color={Colors.textMuted} />}
+              </TouchableOpacity>
             )}
           </View>
 

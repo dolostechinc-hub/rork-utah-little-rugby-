@@ -103,6 +103,8 @@ export default function SettingsScreen() {
     processPendingWrites,
     eventMode,
     setEventMode,
+    showTeamAssignment,
+    setShowTeamAssignment,
   } = useRegistration();
 
   const [showConnectModal, setShowConnectModal] = useState(false);
@@ -148,6 +150,7 @@ export default function SettingsScreen() {
     joinOrgByCode,
     selectOrg,
     deleteOrg,
+    leaveOrg,
     members,
     isLoading: _isOrgLoading,
   } = useOrganization();
@@ -865,6 +868,33 @@ export default function SettingsScreen() {
                 <Text style={styles.switchOrgText}>Switch Organization</Text>
               </TouchableOpacity>
             )}
+
+            <View style={styles.orgActions}>
+              <TouchableOpacity
+                style={styles.joinOrgButton}
+                onPress={() => {
+                  setOrgCodeInput('');
+                  setOrgError(null);
+                  setShowJoinOrgModal(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <LogIn size={18} color={Colors.white} />
+                <Text style={styles.joinOrgButtonText}>Join Another</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.createOrgButton}
+                onPress={() => {
+                  setNewOrgName('');
+                  setOrgError(null);
+                  setShowCreateOrgModal(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Building2 size={18} color={Colors.primary} />
+                <Text style={styles.createOrgButtonText}>Create New</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : (
           <View style={styles.noOrgCard}>
@@ -1386,6 +1416,33 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             </View>
           </View>
+        </View>
+      )}
+
+      {isAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Display Options</Text>
+          <TouchableOpacity
+            style={[styles.card, { alignItems: 'center' }]}
+            onPress={() => void setShowTeamAssignment(!showTeamAssignment)}
+            activeOpacity={0.7}
+            testID="toggle-show-team-assignment"
+          >
+            <View style={[styles.iconBg, { backgroundColor: showTeamAssignment ? '#DCFCE7' : Colors.surfaceAlt }]}>
+              <Users size={24} color={showTeamAssignment ? '#16A34A' : Colors.textSecondary} />
+            </View>
+            <View style={styles.cardContent}>
+              <Text style={styles.cardTitle}>Show Team Assignment</Text>
+              <Text style={styles.cardDescription}>
+                {showTeamAssignment
+                  ? 'Team name is shown on player profiles and pulled from the spreadsheet.'
+                  : 'Hidden. Enable to display team info from your spreadsheet on player profiles.'}
+              </Text>
+            </View>
+            <View style={[styles.toggleSwitch, showTeamAssignment && styles.toggleSwitchOn]}>
+              <View style={[styles.toggleKnob, showTeamAssignment && styles.toggleKnobOn]} />
+            </View>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -2483,6 +2540,37 @@ export default function SettingsScreen() {
                       >
                         <LogIn size={16} color={Colors.primary} />
                         <Text style={styles.myOrgActionText}>Switch To</Text>
+                      </TouchableOpacity>
+                    )}
+
+                    {!canDelete && (
+                      <TouchableOpacity
+                        style={styles.myOrgLeaveButton}
+                        onPress={() => {
+                          Alert.alert(
+                            'Leave Organization?',
+                            `You will lose access to "${org.name}" on this device. You can re-join later using the invite code.`,
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Leave',
+                                style: 'destructive',
+                                onPress: async () => {
+                                  const ok = await leaveOrg(org.id);
+                                  if (ok) {
+                                    Alert.alert('Left Organization', `You have left "${org.name}".`);
+                                  } else {
+                                    Alert.alert('Error', 'Failed to leave organization.');
+                                  }
+                                },
+                              },
+                            ]
+                          );
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <LogIn size={16} color={Colors.warning} style={{ transform: [{ rotate: '180deg' }] }} />
+                        <Text style={styles.myOrgLeaveText}>Leave</Text>
                       </TouchableOpacity>
                     )}
 
@@ -4702,6 +4790,40 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500' as const,
     color: Colors.error,
+  },
+  myOrgLeaveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.warningLight,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 6,
+  },
+  myOrgLeaveText: {
+    fontSize: 13,
+    fontWeight: '500' as const,
+    color: Colors.warning,
+  },
+  toggleSwitch: {
+    width: 48,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.border,
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleSwitchOn: {
+    backgroundColor: '#16A34A',
+  },
+  toggleKnob: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: Colors.white,
+  },
+  toggleKnobOn: {
+    alignSelf: 'flex-end',
   },
   emptyOrgsContainer: {
     alignItems: 'center',
