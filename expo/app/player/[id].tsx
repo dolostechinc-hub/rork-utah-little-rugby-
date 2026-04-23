@@ -25,6 +25,7 @@ import {
   AlertTriangle,
   Users,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -67,6 +68,49 @@ export default function PlayerDetailScreen() {
   const [weightRegistered, setWeightRegistered] = useState(false);
   const [showTeamModal, setShowTeamModal] = useState(false);
   const [isSavingTeam, setIsSavingTeam] = useState(false);
+  const [isUncheckingIn, setIsUncheckingIn] = useState(false);
+
+  const handleUncheckIn = () => {
+    if (!player) return;
+    if (Platform.OS !== 'web') {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+    Alert.alert(
+      'Undo Check-In?',
+      `This will un-check-in ${player.firstName} ${player.lastName}. The player will need to be checked in again. Are you sure you selected the wrong child?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Undo Check-In',
+          style: 'destructive',
+          onPress: async () => {
+            setIsUncheckingIn(true);
+            try {
+              console.log('Un-checking in player:', player.id);
+              await updatePlayer({
+                ...player,
+                checkedIn: false,
+                checkedInAt: undefined,
+              });
+              if (Platform.OS !== 'web') {
+                void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              }
+              Alert.alert(
+                'Check-In Undone',
+                `${player.firstName} ${player.lastName} has been un-checked in and will need to be checked in again.`,
+                [{ text: 'OK', onPress: () => router.back() }]
+              );
+            } catch (error) {
+              console.error('Failed to un-check in player:', error);
+              Alert.alert('Could Not Undo', 'Please try again.');
+            } finally {
+              setIsUncheckingIn(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   useEffect(() => {
     if (!player) return;
@@ -612,23 +656,40 @@ export default function PlayerDetailScreen() {
           </View>
 
           {canEdit ? (
-            <TouchableOpacity
-              style={[styles.saveButton, isComplete && styles.saveButtonComplete]}
-              onPress={handleSave}
-              disabled={isUpdating || isUploading}
-              activeOpacity={0.8}
-            >
-              <Save size={22} color={Colors.white} />
-              <Text style={styles.saveButtonText}>
-                {isUploading
-                  ? 'Uploading Photo...'
-                  : isUpdating
-                    ? 'Syncing...'
-                    : isComplete
-                      ? 'Complete Check-In'
-                      : 'Complete Required Fields'}
-              </Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity
+                style={[styles.saveButton, isComplete && styles.saveButtonComplete]}
+                onPress={handleSave}
+                disabled={isUpdating || isUploading || isUncheckingIn}
+                activeOpacity={0.8}
+              >
+                <Save size={22} color={Colors.white} />
+                <Text style={styles.saveButtonText}>
+                  {isUploading
+                    ? 'Uploading Photo...'
+                    : isUpdating
+                      ? 'Syncing...'
+                      : isComplete
+                        ? 'Complete Check-In'
+                        : 'Complete Required Fields'}
+                </Text>
+              </TouchableOpacity>
+
+              {player.checkedIn && (
+                <TouchableOpacity
+                  style={styles.uncheckButton}
+                  onPress={handleUncheckIn}
+                  disabled={isUpdating || isUploading || isUncheckingIn}
+                  activeOpacity={0.8}
+                  testID="uncheck-in-button"
+                >
+                  <RotateCcw size={18} color={Colors.error} />
+                  <Text style={styles.uncheckButtonText}>
+                    {isUncheckingIn ? 'Undoing…' : 'Wrong Child? Undo Check-In'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </>
           ) : (
             <View style={styles.viewOnlyBanner}>
               <Text style={styles.viewOnlyText}>View-Only Mode</Text>
@@ -1044,5 +1105,22 @@ const styles = StyleSheet.create({
   restrictionSubtitle: {
     fontSize: 12,
     color: Colors.textSecondary,
+  },
+  uncheckButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+    borderRadius: 14,
+    paddingVertical: 14,
+    marginTop: 12,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: Colors.error,
+  },
+  uncheckButtonText: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.error,
   },
 });
