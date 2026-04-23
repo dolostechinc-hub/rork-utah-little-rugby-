@@ -1,7 +1,7 @@
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } from '@/types';
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
@@ -250,31 +250,88 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   // Any time another volunteer updates a player, this device receives the
   // change and merges it into local state + AsyncStorage.
   // ---------------------------------------------------------------------------
-  const applyRosterChangeLocally = useCallback(
-    async (change: RosterChange) => {
-      try {
-        const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
-        const current: Player[] = stored ? JSON.parse(stored) : [];
-        let next: Player[] = current;
+  // Batch incoming realtime changes to avoid UI flashing when many events
+  // arrive in quick succession (e.g. other volunteers checking in kids).
+  const pendingChangesRef = useRef<Map<string, RosterChange>>(new Map());
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const playersEqual = useCallback((a: Player, b: Player): boolean => {
+    return (
+      a.id === b.id &&
+      a.firstName === b.firstName &&
+      a.lastName === b.lastName &&
+      a.club === b.club &&
+      a.ageGroup === b.ageGroup &&
+      a.division === b.division &&
+      a.teamName === b.teamName &&
+      a.dateOfBirth === b.dateOfBirth &&
+      a.parentName === b.parentName &&
+      a.parentPhone === b.parentPhone &&
+      !!a.isAgeVerified === !!b.isAgeVerified &&
+      (a.photoUri ?? null) === (b.photoUri ?? null) &&
+      (a.weight ?? '') === (b.weight ?? '') &&
+      !!a.checkedIn === !!b.checkedIn &&
+      (a.checkedInAt ?? null) === (b.checkedInAt ?? null) &&
+      (a.restrictionStatus ?? 'none') === (b.restrictionStatus ?? 'none') &&
+      (a.calculatedAgeGroup ?? '') === (b.calculatedAgeGroup ?? '')
+    );
+  }, []);
+
+  const flushPendingChanges = useCallback(async () => {
+    flushTimerRef.current = null;
+    const pending = pendingChangesRef.current;
+    if (pending.size === 0) return;
+    const changes = Array.from(pending.values());
+    pendingChangesRef.current = new Map();
+
+    try {
+      const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+      const current: Player[] = stored ? JSON.parse(stored) : [];
+      const byId = new Map<string, Player>();
+      current.forEach((p) => byId.set(p.id, p));
+
+      let mutated = false;
+      for (const change of changes) {
         if (change.kind === 'upsert') {
-          const idx = current.findIndex((p) => p.id === change.player.id);
-          if (idx >= 0) {
-            next = [...current];
-            next[idx] = change.player;
-          } else {
-            next = [...current, change.player];
+          const existing = byId.get(change.player.id);
+          if (!existing || !playersEqual(existing, change.player)) {
+            byId.set(change.player.id, change.player);
+            mutated = true;
           }
         } else if (change.kind === 'delete') {
-          next = current.filter((p) => p.id !== change.id);
+          if (byId.has(change.id)) {
+            byId.delete(change.id);
+            mutated = true;
+          }
         }
-        memoryPlayerCache = next;
-        await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(next));
-        queryClient.setQueryData(['local-players'], next);
-      } catch (err) {
-        console.warn('[rosterSync] failed to apply remote change locally:', err);
+      }
+
+      if (!mutated) {
+        console.log('[rosterSync] batched changes were no-ops, skipping re-render');
+        return;
+      }
+
+      const next = Array.from(byId.values());
+      memoryPlayerCache = next;
+      await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(next));
+      queryClient.setQueryData(['local-players'], next);
+      console.log('[rosterSync] applied batched remote changes:', changes.length);
+    } catch (err) {
+      console.warn('[rosterSync] failed to flush remote changes:', err);
+    }
+  }, [playersEqual, queryClient]);
+
+  const applyRosterChangeLocally = useCallback(
+    (change: RosterChange) => {
+      const key = change.kind === 'upsert' ? change.player.id : change.id;
+      pendingChangesRef.current.set(key, change);
+      if (flushTimerRef.current == null) {
+        flushTimerRef.current = setTimeout(() => {
+          void flushPendingChanges();
+        }, 300);
       }
     },
-    [queryClient],
+    [flushPendingChanges],
   );
 
   useEffect(() => {
@@ -314,13 +371,17 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
     const unsubscribe = subscribeToRoster(currentOrg.id, (change) => {
       if (cancelled) return;
-      console.log('[rosterSync] remote change received:', change.kind);
-      void applyRosterChangeLocally(change);
+      applyRosterChangeLocally(change);
     });
 
     return () => {
       cancelled = true;
       unsubscribe();
+      if (flushTimerRef.current != null) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
+      pendingChangesRef.current = new Map();
     };
   }, [currentOrg?.id, queryClient, applyRosterChangeLocally]);
 
