@@ -7,6 +7,7 @@ import {
   TextInput,
   ActivityIndicator,
   RefreshControl,
+  Keyboard,
 } from 'react-native';
 import { Player } from '@/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -118,6 +119,8 @@ export default function CheckInScreen() {
             onChangeText={setSearchQuery}
             autoCapitalize="none"
             autoCorrect={false}
+            returnKeyType="done"
+            onSubmitEditing={() => Keyboard.dismiss()}
             testID="search-input"
           />
         </View>
@@ -135,6 +138,8 @@ export default function CheckInScreen() {
           keyExtractor={keyExtractor}
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           contentContainerStyle={styles.listContent}
           initialNumToRender={15}
           maxToRenderPerBatch={10}
