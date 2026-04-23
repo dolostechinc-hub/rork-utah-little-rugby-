@@ -238,15 +238,21 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   });
 
   useEffect(() => {
-    if (!isConnected) return;
+    if (!sheetsConfig?.isConnected) return;
     const data = sheetsPlayersQuery.data;
     if (!data || data.length === 0) return;
+    // Don't overwrite a healthy local cache with empty/partial sheet data
+    const local = localPlayersQuery.data;
+    if (local && local.length > data.length * 2) {
+      console.log('Skipping mirror: local cache larger than sheet data');
+      return;
+    }
     console.log('Mirroring sheets data to local cache (fallback):', data.length);
     memoryPlayerCache = data;
     AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(data)).catch((err) =>
       console.error('Failed to mirror sheets data to local cache:', err),
     );
-  }, [sheetsPlayersQuery.data, sheetsConfig?.isConnected]);
+  }, [sheetsPlayersQuery.data, sheetsConfig?.isConnected, localPlayersQuery.data]);
 
   const savePendingQueue = useCallback(async (queue: PendingWrite[]) => {
     await AsyncStorage.setItem(WRITE_QUEUE_KEY, JSON.stringify(queue));
@@ -690,11 +696,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   );
   
   const players = useMemo(() => {
-    if (isConnected && sheetsPlayersQuery.data) {
+    if (isConnected && sheetsPlayersQuery.data && sheetsPlayersQuery.data.length > 0) {
       return sheetsPlayersQuery.data;
     }
-    if (isConnected && localPlayersQuery.data && localPlayersQuery.data.length > 0) {
-      console.log('Using local cache fallback while sheets is unreachable');
+    if (localPlayersQuery.data && localPlayersQuery.data.length > 0) {
+      if (isConnected) {
+        console.log('Using local cache (sheets returned no rows or unreachable)');
+      }
       return localPlayersQuery.data;
     }
     return localPlayersQuery.data || [];
