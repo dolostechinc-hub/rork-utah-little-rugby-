@@ -13,6 +13,13 @@ import {
   markPlayerAgeVerified,
   normalizeVerificationKey,
 } from '@/lib/ageVerifiedRegistry';
+import {
+  fetchRoster,
+  upsertRosterPlayer,
+  upsertRosterPlayers,
+  subscribeToRoster,
+  type RosterChange,
+} from '@/lib/rosterSync';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -237,6 +244,108 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     staleTime: 30000,
   });
 
+  // ---------------------------------------------------------------------------
+  // Multi-device roster sync via Supabase (step 2)
+  // On org change: fetch remote roster + subscribe to realtime changes.
+  // Any time another volunteer updates a player, this device receives the
+  // change and merges it into local state + AsyncStorage.
+  // ---------------------------------------------------------------------------
+  const applyRosterChangeLocally = useCallback(
+    async (change: RosterChange) => {
+      try {
+        const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+        const current: Player[] = stored ? JSON.parse(stored) : [];
+        let next: Player[] = current;
+        if (change.kind === 'upsert') {
+          const idx = current.findIndex((p) => p.id === change.player.id);
+          if (idx >= 0) {
+            next = [...current];
+            next[idx] = change.player;
+          } else {
+            next = [...current, change.player];
+          }
+        } else if (change.kind === 'delete') {
+          next = current.filter((p) => p.id !== change.id);
+        }
+        memoryPlayerCache = next;
+        await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(next));
+        queryClient.setQueryData(['local-players'], next);
+      } catch (err) {
+        console.warn('[rosterSync] failed to apply remote change locally:', err);
+      }
+    },
+    [queryClient],
+  );
+
+  useEffect(() => {
+    if (!currentOrg?.id) return;
+    let cancelled = false;
+
+    const mergeRemoteRoster = async () => {
+      try {
+        const remote = await fetchRoster(currentOrg.id);
+        if (cancelled) return;
+        if (remote.length === 0) {
+          console.log('[rosterSync] remote roster empty, keeping local');
+          return;
+        }
+        const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+        const local: Player[] = stored ? JSON.parse(stored) : [];
+
+        const byId = new Map<string, Player>();
+        local.forEach((p) => byId.set(p.id, p));
+        remote.forEach((p) => byId.set(p.id, p));
+        const merged = Array.from(byId.values());
+
+        memoryPlayerCache = merged;
+        await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(merged));
+        queryClient.setQueryData(['local-players'], merged);
+        console.log('[rosterSync] merged remote roster:', {
+          remote: remote.length,
+          local: local.length,
+          merged: merged.length,
+        });
+      } catch (err) {
+        console.warn('[rosterSync] initial fetch failed (using local cache):', err);
+      }
+    };
+
+    void mergeRemoteRoster();
+
+    const unsubscribe = subscribeToRoster(currentOrg.id, (change) => {
+      if (cancelled) return;
+      console.log('[rosterSync] remote change received:', change.kind);
+      void applyRosterChangeLocally(change);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [currentOrg?.id, queryClient, applyRosterChangeLocally]);
+
+  const pushPlayerToRemote = useCallback(
+    (player: Player) => {
+      const orgId = currentOrg?.id;
+      if (!orgId) return;
+      void upsertRosterPlayer(orgId, player).catch((err) => {
+        console.warn('[rosterSync] background upsert failed:', err?.message ?? err);
+      });
+    },
+    [currentOrg?.id],
+  );
+
+  const pushPlayersToRemote = useCallback(
+    (playersBatch: Player[]) => {
+      const orgId = currentOrg?.id;
+      if (!orgId || playersBatch.length === 0) return;
+      void upsertRosterPlayers(orgId, playersBatch).catch((err) => {
+        console.warn('[rosterSync] background bulk upsert failed:', err?.message ?? err);
+      });
+    },
+    [currentOrg?.id],
+  );
+
   useEffect(() => {
     if (!sheetsConfig?.isConnected) return;
     const data = sheetsPlayersQuery.data;
@@ -299,6 +408,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     retry: 3,
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _syncHooks = { pushPlayerToRemote, pushPlayersToRemote };
+
   const updateLocalMutation = useMutation({
     mutationFn: async (updatedPlayer: Player) => {
       console.log('Updating player locally:', updatedPlayer.id);
@@ -336,10 +448,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Player data saved to storage, total players:', newPlayers.length);
       return newPlayers;
     },
-    onSuccess: (newPlayers) => {
+    onSuccess: (newPlayers, variables) => {
       console.log('Update mutation success, refreshing query cache');
       memoryPlayerCache = newPlayers;
       queryClient.setQueryData(['local-players'], newPlayers);
+      pushPlayerToRemote(variables);
     },
   });
 
@@ -358,9 +471,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Player added to storage, total players:', newPlayers.length);
       return { players: newPlayers, newPlayer: player };
     },
-    onSuccess: ({ players }) => {
+    onSuccess: ({ players, newPlayer }) => {
       memoryPlayerCache = players;
       queryClient.setQueryData(['local-players'], players);
+      pushPlayerToRemote(newPlayer);
     },
   });
 
@@ -501,6 +615,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Import success with deduplication, total players:', allPlayers.length);
       memoryPlayerCache = allPlayers;
       queryClient.setQueryData(['local-players'], allPlayers);
+      pushPlayersToRemote(allPlayers);
     },
   });
 
@@ -1113,13 +1228,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(resultPlayers));
     memoryPlayerCache = resultPlayers;
     queryClient.setQueryData(['local-players'], resultPlayers);
+    pushPlayersToRemote(resultPlayers);
 
     return {
       imported: newPlayersAdded,
       duplicatesKept,
       overwritten: namesMatch && overwriteIfMatch,
     };
-  }, [queryClient]);
+  }, [queryClient, pushPlayersToRemote]);
 
   const processPendingWrites = useCallback(async () => {
     if (pendingWrites.length === 0 || !sheetsConfig?.isConnected || !sheetsConfig?.spreadsheetId) return;

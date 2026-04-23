@@ -24,6 +24,7 @@ import {
   ExternalLink,
 } from 'lucide-react-native';
 import Colors from '@/constants/colors';
+import { fetchSheetCsv, parseCSV as parseCsvShared, extractSpreadsheetId as extractIdShared } from '@/lib/googleSheetsCsv';
 
 interface CSVImportModalProps {
   visible: boolean;
@@ -94,17 +95,7 @@ export default function CSVImportModal({
     onClose();
   }, [onClose, resetState]);
 
-  const extractSpreadsheetId = (url: string): string | null => {
-    const patterns = [
-      /\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/,
-      /^([a-zA-Z0-9-_]+)$/,
-    ];
-    for (const pattern of patterns) {
-      const match = url.match(pattern);
-      if (match) return match[1];
-    }
-    return null;
-  };
+  const extractSpreadsheetId = (url: string): string | null => extractIdShared(url);
 
   const handleSelectSource = (source: ImportSource) => {
     setImportSource(source);
@@ -126,23 +117,9 @@ export default function CSVImportModal({
     console.log('Fetching Google Sheet:', extractedId);
     
     try {
-      const csvUrl = `https://docs.google.com/spreadsheets/d/${extractedId}/export?format=csv`;
-      console.log('Fetching CSV from:', csvUrl);
-      
-      const response = await fetch(csvUrl);
-      
-      if (!response.ok) {
-        throw new Error('Could not access the spreadsheet. Make sure it\'s shared as "Anyone with the link can view".');
-      }
-      
-      const content = await response.text();
+      const content = await fetchSheetCsv(extractedId);
       console.log('CSV content length:', content.length);
-      
-      if (!content || content.includes('<!DOCTYPE html>')) {
-        throw new Error('Could not access the spreadsheet. Make sure it\'s shared as "Anyone with the link can view".');
-      }
-      
-      const parsed = parseCSV(content);
+      const parsed = parseCsvShared(content);
       console.log('Parsed rows:', parsed.length);
       
       if (parsed.length < 2) {
@@ -208,28 +185,7 @@ export default function CSVImportModal({
 
 
 
-  const parseCSV = (content: string): string[][] => {
-    const lines = content.split(/\r?\n/).filter(line => line.trim());
-    return lines.map(line => {
-      const values: string[] = [];
-      let current = '';
-      let inQuotes = false;
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === ',' && !inQuotes) {
-          values.push(current.trim());
-          current = '';
-        } else {
-          current += char;
-        }
-      }
-      values.push(current.trim());
-      return values;
-    });
-  };
+  const parseCSV = (content: string): string[][] => parseCsvShared(content);
 
   const handleSelectFile = async () => {
     try {
