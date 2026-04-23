@@ -1000,12 +1000,28 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     let result = players;
 
     const normalizeStr = (s: string | undefined | null) => (s || '').toString().trim().toLowerCase();
-    const normalizeAge = (s: string | undefined | null) =>
-      (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
+    const normalizeAge = (s: string | undefined | null): string => {
+      const raw = (s || '').toString().toUpperCase();
+      if (!raw.trim()) return '';
+      const match = raw.match(/(\d{1,2})/);
+      if (match) {
+        return `U${parseInt(match[1], 10)}`;
+      }
+      return raw.replace(/\s+/g, '');
+    };
+
+    console.log('[Filter] applying filters:', {
+      club: filters.club,
+      ageGroup: filters.ageGroup,
+      division: filters.division,
+      teamName: filters.teamName,
+      totalPlayers: result.length,
+    });
 
     if (filters.club) {
       const target = normalizeStr(filters.club);
       result = result.filter(p => normalizeStr(p.club) === target);
+      console.log('[Filter] after club filter:', result.length);
     }
     if (filters.ageGroup) {
       const target = normalizeAge(filters.ageGroup);
@@ -1013,10 +1029,12 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup || '';
         return normalizeAge(effectiveAgeGroup) === target;
       });
+      console.log('[Filter] after age filter:', result.length, 'target:', target);
     }
     if (filters.division) {
       const target = normalizeStr(filters.division);
       result = result.filter(p => normalizeStr(p.division) === target);
+      console.log('[Filter] after division filter:', result.length);
     }
     if (filters.teamName) {
       const target = normalizeStr(filters.teamName);
