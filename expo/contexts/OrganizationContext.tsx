@@ -168,6 +168,85 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
 
   const orgData = orgDataQuery.data || DEFAULT_ORG_DATA;
 
+  useEffect(() => {
+    if (!isInitialized || !isOnline) return;
+    if (!orgData.organizations.length) return;
+
+    let cancelled = false;
+
+    const syncLocalOrgsToSupabase = async () => {
+      try {
+        const orgIds = orgData.organizations.map(o => o.id);
+        const { data: remoteOrgs, error: remoteErr } = await supabase
+          .from('organizations')
+          .select('id')
+          .in('id', orgIds);
+
+        if (remoteErr) {
+          console.log('[syncOrgs] could not check remote orgs:', remoteErr.message);
+          return;
+        }
+        if (cancelled) return;
+
+        const remoteIds = new Set((remoteOrgs ?? []).map(r => r.id as string));
+        const missing = orgData.organizations.filter(o => !remoteIds.has(o.id));
+        if (missing.length === 0) {
+          console.log('[syncOrgs] all local orgs already in Supabase');
+          return;
+        }
+
+        console.log('[syncOrgs] uploading missing orgs to Supabase:', missing.map(m => `${m.name} (${m.code})`));
+
+        for (const org of missing) {
+          const { error: orgErr } = await supabase
+            .from('organizations')
+            .upsert({
+              id: org.id,
+              name: org.name,
+              code: org.code,
+              logo_uri: org.logoUri ?? null,
+              primary_color: org.primaryColor ?? '#0B7A4B',
+              owner_id: org.ownerId,
+              expires_at: org.expiresAt ?? null,
+              created_at: org.createdAt,
+            }, { onConflict: 'id' });
+
+          if (orgErr) {
+            console.warn('[syncOrgs] failed to upload org', org.code, orgErr.message);
+            continue;
+          }
+          console.log('[syncOrgs] uploaded org', org.code);
+
+          const orgMembers = orgData.members.filter(m => m.orgId === org.id);
+          if (orgMembers.length > 0) {
+            const { error: memErr } = await supabase
+              .from('org_members')
+              .upsert(
+                orgMembers.map(m => ({
+                  id: m.id,
+                  org_id: m.orgId,
+                  user_id: m.userId,
+                  role: m.role,
+                  email: m.email ?? '',
+                  name: m.name ?? '',
+                  joined_at: m.joinedAt,
+                })),
+                { onConflict: 'id' }
+              );
+            if (memErr) {
+              console.warn('[syncOrgs] failed to upload members for', org.code, memErr.message);
+            }
+          }
+        }
+      } catch (err) {
+        console.log('[syncOrgs] sync failed:', err);
+      }
+    };
+
+    void syncLocalOrgsToSupabase();
+    return () => { cancelled = true; };
+  }, [isInitialized, isOnline, orgData.organizations, orgData.members]);
+
   const currentOrg = useMemo(() => {
     if (!currentOrgId) return null;
     return orgData.organizations.find(o => o.id === currentOrgId) || null;
