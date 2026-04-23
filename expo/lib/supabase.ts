@@ -206,11 +206,22 @@ function getUploadExtension(photoUri: string): string {
   return fileExt;
 }
 
+function slugifyPlayerName(name: string): string {
+  const cleaned = name
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return cleaned.slice(0, 60);
+}
+
 export async function uploadPlayerPhoto(
   playerId: string,
   photoUri: string,
   orgId: string,
-  maxRetries: number = 3
+  maxRetries: number = 3,
+  playerName?: string
 ): Promise<string> {
   if (!photoUri) {
     throw new Error('No photo URI provided');
@@ -224,7 +235,12 @@ export async function uploadPlayerPhoto(
   const photo = await readPhotoAsBody(processedUri);
   const contentType = getUploadContentType(processedUri);
   const ext = getUploadExtension(processedUri);
-  const path = `${orgId}/${playerId}/${Date.now()}.${ext}`;
+  const nameSlug = playerName ? slugifyPlayerName(playerName) : '';
+  const fileName = nameSlug
+    ? `${nameSlug}_${Date.now()}.${ext}`
+    : `${Date.now()}.${ext}`;
+  const path = `${orgId}/${playerId}/${fileName}`;
+  console.log('[uploadPlayerPhoto] path', { path, playerName, nameSlug });
 
   let lastError: string | null = null;
 

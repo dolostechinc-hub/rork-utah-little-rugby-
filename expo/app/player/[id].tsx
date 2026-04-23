@@ -315,7 +315,8 @@ export default function PlayerDetailScreen() {
           player.id,
           photoUri,
           currentOrg?.id ?? 'utah-little-rugby',
-          3
+          3,
+          `${player.firstName ?? ''} ${player.lastName ?? ''}`.trim()
         );
         console.log('Photo uploaded to cloud successfully:', uploadedUrl);
         finalPhotoUri = uploadedUrl;

@@ -194,7 +194,13 @@ export default function AddPlayerScreen() {
         console.log('Uploading photo to cloud storage...');
         const tempPlayerId = `new-${Date.now()}`;
         try {
-          const uploadedUrl = await uploadPlayerPhoto(tempPlayerId, photoUri, currentOrg?.id ?? 'utah-little-rugby');
+          const uploadedUrl = await uploadPlayerPhoto(
+            tempPlayerId,
+            photoUri,
+            currentOrg?.id ?? 'utah-little-rugby',
+            3,
+            `${firstName.trim()} ${lastName.trim()}`.trim()
+          );
           console.log('Photo uploaded successfully:', uploadedUrl);
           finalPhotoUri = uploadedUrl;
         } catch (uploadError) {
