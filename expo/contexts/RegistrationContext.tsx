@@ -18,6 +18,7 @@ import {
   upsertRosterPlayer,
   upsertRosterPlayers,
   subscribeToRoster,
+  deleteRosterPlayer,
   type RosterChange,
 } from '@/lib/rosterSync';
 
@@ -36,6 +37,93 @@ const SHOW_TEAM_ASSIGNMENT_KEY = 'show_team_assignment';
 export type EventMode = 'registration' | 'viewOnly';
 
 let memoryPlayerCache: Player[] | null = null;
+
+function playerDedupeKey(p: { firstName: string; lastName: string; dateOfBirth: string }): string {
+  const first = (p.firstName || '').toLowerCase().trim();
+  const last = (p.lastName || '').toLowerCase().trim();
+  const dob = (p.dateOfBirth || '').trim();
+  if (!first || !last) return '';
+  return `${first}_${last}_${dob}`;
+}
+
+function mergePlayerRecords(a: Player, b: Player): Player {
+  const pick = <T,>(av: T, bv: T, isEmpty: (v: T) => boolean): T => {
+    if (!isEmpty(av)) return av;
+    return bv;
+  };
+  const isEmptyStr = (v: string | null | undefined) => !v || !String(v).trim();
+  const checkedIn = !!a.checkedIn || !!b.checkedIn;
+  let checkedInAt: string | null = null;
+  if (a.checkedInAt && b.checkedInAt) {
+    checkedInAt = new Date(a.checkedInAt) > new Date(b.checkedInAt) ? a.checkedInAt : b.checkedInAt;
+  } else {
+    checkedInAt = a.checkedInAt || b.checkedInAt || null;
+  }
+  return {
+    ...a,
+    firstName: pick(a.firstName, b.firstName, isEmptyStr),
+    lastName: pick(a.lastName, b.lastName, isEmptyStr),
+    club: pick(a.club, b.club, isEmptyStr),
+    ageGroup: pick(a.ageGroup, b.ageGroup, isEmptyStr),
+    division: pick(a.division, b.division, isEmptyStr),
+    teamName: pick(a.teamName, b.teamName, isEmptyStr),
+    dateOfBirth: pick(a.dateOfBirth, b.dateOfBirth, isEmptyStr),
+    parentName: pick(a.parentName, b.parentName, isEmptyStr),
+    parentPhone: pick(a.parentPhone, b.parentPhone, isEmptyStr),
+    isAgeVerified: !!a.isAgeVerified || !!b.isAgeVerified,
+    photoUri: a.photoUri || b.photoUri || null,
+    weight: pick(a.weight ?? '', b.weight ?? '', isEmptyStr),
+    checkedIn,
+    checkedInAt,
+    restrictionStatus: a.restrictionStatus && a.restrictionStatus !== 'none' ? a.restrictionStatus : (b.restrictionStatus ?? a.restrictionStatus ?? 'none'),
+    calculatedAgeGroup: a.calculatedAgeGroup || b.calculatedAgeGroup,
+  };
+}
+
+function scorePlayer(p: Player): number {
+  let s = 0;
+  if (p.checkedIn) s += 100;
+  if (p.photoUri) s += 40;
+  if (p.isAgeVerified) s += 20;
+  if (p.weight && String(p.weight).trim()) s += 5;
+  if (p.teamName && p.teamName.trim()) s += 3;
+  if (p.parentName && p.parentName.trim()) s += 2;
+  return s;
+}
+
+export function dedupePlayers(list: Player[]): { deduped: Player[]; duplicateIds: string[] } {
+  const groups = new Map<string, Player[]>();
+  const noKey: Player[] = [];
+  for (const p of list) {
+    const key = playerDedupeKey(p);
+    if (!key) {
+      noKey.push(p);
+      continue;
+    }
+    const arr = groups.get(key);
+    if (arr) arr.push(p); else groups.set(key, [p]);
+  }
+  const deduped: Player[] = [...noKey];
+  const duplicateIds: string[] = [];
+  for (const arr of groups.values()) {
+    if (arr.length === 1) {
+      deduped.push(arr[0]);
+      continue;
+    }
+    const sorted = [...arr].sort((a, b) => {
+      const diff = scorePlayer(b) - scorePlayer(a);
+      if (diff !== 0) return diff;
+      return a.id.localeCompare(b.id);
+    });
+    let canonical = sorted[0];
+    for (let i = 1; i < sorted.length; i++) {
+      canonical = mergePlayerRecords(canonical, sorted[i]);
+      duplicateIds.push(sorted[i].id);
+    }
+    deduped.push({ ...canonical, id: sorted[0].id });
+  }
+  return { deduped, duplicateIds };
+}
 
 export interface SheetsConfig {
   spreadsheetId: string;
@@ -352,16 +440,39 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         const byId = new Map<string, Player>();
         local.forEach((p) => byId.set(p.id, p));
         remote.forEach((p) => byId.set(p.id, p));
-        const merged = Array.from(byId.values());
+        const combined = Array.from(byId.values());
 
-        memoryPlayerCache = merged;
-        await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(merged));
-        queryClient.setQueryData(['local-players'], merged);
-        console.log('[rosterSync] merged remote roster:', {
+        const { deduped, duplicateIds } = dedupePlayers(combined);
+
+        memoryPlayerCache = deduped;
+        await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(deduped));
+        queryClient.setQueryData(['local-players'], deduped);
+        console.log('[rosterSync] merged + deduped remote roster:', {
           remote: remote.length,
           local: local.length,
-          merged: merged.length,
+          combined: combined.length,
+          deduped: deduped.length,
+          duplicatesRemoved: duplicateIds.length,
         });
+
+        if (duplicateIds.length > 0) {
+          const remoteIds = new Set(remote.map((p) => p.id));
+          const toDeleteRemote = duplicateIds.filter((id) => remoteIds.has(id));
+          if (toDeleteRemote.length > 0) {
+            console.log('[rosterSync] cleaning duplicate rows from Supabase:', toDeleteRemote.length);
+            for (const dupId of toDeleteRemote) {
+              if (cancelled) return;
+              void deleteRosterPlayer(currentOrg.id, dupId).catch((e) =>
+                console.warn('[rosterSync] dup delete failed:', e?.message ?? e),
+              );
+            }
+          }
+          const canonicalIds = new Set(deduped.map((p) => p.id));
+          const toPush = deduped.filter((p) => canonicalIds.has(p.id));
+          void upsertRosterPlayers(currentOrg.id, toPush).catch((e) =>
+            console.warn('[rosterSync] canonical re-upsert failed:', e?.message ?? e),
+          );
+        }
       } catch (err) {
         console.warn('[rosterSync] initial fetch failed (using local cache):', err);
       }
@@ -872,16 +983,26 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   );
   
   const players = useMemo(() => {
+    let raw: Player[];
     if (isConnected && sheetsPlayersQuery.data && sheetsPlayersQuery.data.length > 0) {
-      return sheetsPlayersQuery.data;
-    }
-    if (localPlayersQuery.data && localPlayersQuery.data.length > 0) {
+      raw = sheetsPlayersQuery.data;
+    } else if (localPlayersQuery.data && localPlayersQuery.data.length > 0) {
       if (isConnected) {
         console.log('Using local cache (sheets returned no rows or unreachable)');
       }
-      return localPlayersQuery.data;
+      raw = localPlayersQuery.data;
+    } else {
+      raw = localPlayersQuery.data || [];
     }
-    return localPlayersQuery.data || [];
+    const { deduped, duplicateIds } = dedupePlayers(raw);
+    if (duplicateIds.length > 0) {
+      console.log('[dedupe] collapsed duplicates:', {
+        before: raw.length,
+        after: deduped.length,
+        removed: duplicateIds.length,
+      });
+    }
+    return deduped;
   }, [isConnected, sheetsPlayersQuery.data, localPlayersQuery.data]);
 
   const clubs: Club[] = useMemo(() => {
