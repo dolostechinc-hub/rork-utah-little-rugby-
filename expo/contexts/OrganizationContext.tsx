@@ -176,75 +176,84 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
 
     const syncLocalOrgsToSupabase = async () => {
       try {
-        const orgIds = orgData.organizations.map(o => o.id);
-        const { data: remoteOrgs, error: remoteErr } = await supabase
-          .from('organizations')
-          .select('id')
-          .in('id', orgIds);
+        console.log('[syncOrgs] auto-sync starting for', orgData.organizations.length, 'local orgs');
 
-        if (remoteErr) {
-          console.log('[syncOrgs] could not check remote orgs:', remoteErr.message);
-          return;
-        }
-        if (cancelled) return;
+        for (const org of orgData.organizations) {
+          if (cancelled) return;
 
-        const remoteIds = new Set((remoteOrgs ?? []).map(r => r.id as string));
-        const missing = orgData.organizations.filter(o => !remoteIds.has(o.id));
-        if (missing.length === 0) {
-          console.log('[syncOrgs] all local orgs already in Supabase');
-          return;
-        }
+          // Verify via the same RPC testers will use. This is the ground truth.
+          const verify = await supabase.rpc('public_lookup_org_by_code', { p_code: org.code });
+          const verifiedRow = Array.isArray(verify.data) ? verify.data[0] : verify.data;
+          if (verify.error) {
+            console.log('[syncOrgs] RPC lookup error for', org.code, verify.error.code, verify.error.message);
+          }
 
-        console.log('[syncOrgs] uploading missing orgs to Supabase:', missing.map(m => `${m.name} (${m.code})`));
-
-        for (const org of missing) {
-          const { error: orgErr } = await supabase
-            .from('organizations')
-            .upsert({
-              id: org.id,
-              name: org.name,
-              code: org.code,
-              logo_uri: org.logoUri ?? null,
-              primary_color: org.primaryColor ?? '#0B7A4B',
-              owner_id: org.ownerId,
-              expires_at: org.expiresAt ?? null,
-              created_at: org.createdAt,
-            }, { onConflict: 'id' });
-
-          if (orgErr) {
-            console.warn('[syncOrgs] failed to upload org', org.code, orgErr.message);
+          const needsUpload = !verifiedRow || verifiedRow.id !== org.id;
+          if (!needsUpload) {
+            console.log('[syncOrgs] already in cloud:', org.code);
             continue;
+          }
+
+          console.log('[syncOrgs] uploading org via RPC:', org.code, org.name);
+          const rpc = await supabase.rpc('public_upsert_organization', {
+            p_id: org.id,
+            p_name: org.name,
+            p_code: org.code,
+            p_logo_uri: org.logoUri ?? null,
+            p_primary_color: org.primaryColor ?? '#0B7A4B',
+            p_owner_id: org.ownerId,
+            p_expires_at: org.expiresAt ?? null,
+            p_created_at: org.createdAt,
+          });
+
+          if (rpc.error) {
+            console.warn('[syncOrgs] RPC upload failed for', org.code, rpc.error.code, rpc.error.message, '- trying direct upsert');
+            const { error: orgErr } = await supabase
+              .from('organizations')
+              .upsert({
+                id: org.id,
+                name: org.name,
+                code: org.code,
+                logo_uri: org.logoUri ?? null,
+                primary_color: org.primaryColor ?? '#0B7A4B',
+                owner_id: org.ownerId,
+                expires_at: org.expiresAt ?? null,
+                created_at: org.createdAt,
+              }, { onConflict: 'id' });
+            if (orgErr) {
+              console.warn('[syncOrgs] direct upsert also failed for', org.code, orgErr.code, orgErr.message);
+              continue;
+            }
           }
           console.log('[syncOrgs] uploaded org', org.code);
 
           const orgMembers = orgData.members.filter(m => m.orgId === org.id);
-          if (orgMembers.length > 0) {
-            const { error: memErr } = await supabase
-              .from('org_members')
-              .upsert(
-                orgMembers.map(m => ({
-                  id: m.id,
-                  org_id: m.orgId,
-                  user_id: m.userId,
-                  role: m.role,
-                  email: m.email ?? '',
-                  name: m.name ?? '',
-                  joined_at: m.joinedAt,
-                })),
-                { onConflict: 'id' }
-              );
-            if (memErr) {
-              console.warn('[syncOrgs] failed to upload members for', org.code, memErr.message);
+          for (const m of orgMembers) {
+            const memRpc = await supabase.rpc('public_upsert_org_member', {
+              p_id: m.id,
+              p_org_id: m.orgId,
+              p_user_id: m.userId,
+              p_role: m.role,
+              p_email: m.email ?? '',
+              p_name: m.name ?? '',
+              p_joined_at: m.joinedAt,
+            });
+            if (memRpc.error) {
+              console.warn('[syncOrgs] member RPC failed for', m.id, memRpc.error.message);
             }
           }
         }
+        console.log('[syncOrgs] auto-sync complete');
       } catch (err) {
         console.log('[syncOrgs] sync failed:', err);
       }
     };
 
     void syncLocalOrgsToSupabase();
-    return () => { cancelled = true; };
+    const intervalId = setInterval(() => {
+      if (!cancelled) void syncLocalOrgsToSupabase();
+    }, 60_000);
+    return () => { cancelled = true; clearInterval(intervalId); };
   }, [isInitialized, isOnline, orgData.organizations, orgData.members]);
 
   const currentOrg = useMemo(() => {
