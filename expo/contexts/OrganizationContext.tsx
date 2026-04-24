@@ -400,6 +400,77 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     return org;
   }, [orgData, saveData, selectOrg]);
 
+  const pushOrgToCloud = useCallback(async (orgId: string): Promise<{ success: boolean; message: string }> => {
+    const org = orgData.organizations.find(o => o.id === orgId);
+    if (!org) {
+      return { success: false, message: 'Organization not found on this device.' };
+    }
+    console.log('[pushOrgToCloud] pushing org', org.code, org.id);
+    try {
+      const { error: orgErr } = await supabase
+        .from('organizations')
+        .upsert({
+          id: org.id,
+          name: org.name,
+          code: org.code,
+          logo_uri: org.logoUri ?? null,
+          primary_color: org.primaryColor ?? '#0B7A4B',
+          owner_id: org.ownerId,
+          expires_at: org.expiresAt ?? null,
+          created_at: org.createdAt,
+        }, { onConflict: 'id' });
+
+      if (orgErr) {
+        console.warn('[pushOrgToCloud] org upsert failed:', orgErr.code, orgErr.message);
+        return {
+          success: false,
+          message: `Could not sync to cloud.\n\nSupabase: ${orgErr.code ?? ''} ${orgErr.message ?? ''}\n\nIf this says RLS / policy, run the SQL migration "012_allow_anon_org_join.sql" in the Supabase SQL editor.`,
+        };
+      }
+
+      // Verify it is actually readable by the anon role (what other devices use)
+      const { data: verify, error: verifyErr } = await supabase
+        .from('organizations')
+        .select('id,code,name')
+        .eq('id', org.id)
+        .maybeSingle();
+
+      if (verifyErr) {
+        return { success: false, message: `Uploaded, but readback failed: ${verifyErr.message}` };
+      }
+      if (!verify) {
+        return { success: false, message: 'Uploaded, but the row is not visible to the anon role. The Supabase RLS migration "012_allow_anon_org_join.sql" still needs to be applied.' };
+      }
+
+      // Also upsert members for this org so admins/owners are recognized in the cloud
+      const orgMembers = orgData.members.filter(m => m.orgId === org.id);
+      if (orgMembers.length > 0) {
+        const { error: memErr } = await supabase
+          .from('org_members')
+          .upsert(
+            orgMembers.map(m => ({
+              id: m.id,
+              org_id: m.orgId,
+              user_id: m.userId,
+              role: m.role,
+              email: m.email ?? '',
+              name: m.name ?? '',
+              joined_at: m.joinedAt,
+            })),
+            { onConflict: 'id' }
+          );
+        if (memErr) {
+          console.warn('[pushOrgToCloud] member upsert failed:', memErr.message);
+        }
+      }
+
+      return { success: true, message: `"${verify.name}" is now synced to the cloud. Invite code ${verify.code} will work on any device.` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: `Network error: ${msg}` };
+    }
+  }, [orgData.organizations, orgData.members]);
+
   const updateOrg = useCallback(async (org: Organization) => {
     console.log('Updating organization:', org.id);
     const newData: OrgData = {
@@ -417,21 +488,55 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     let org = orgData.organizations.find(o => o.code.toUpperCase() === normalizedCode);
     console.log('Local lookup result:', org ? `Found: ${org.name}` : 'Not found locally');
     
-    // If not found locally, try to fetch from Supabase
+    let lastSupabaseError: string | null = null;
+    // If not found locally, try to fetch from Supabase (try multiple strategies)
     if (!org) {
       console.log('Organization not found locally, checking Supabase...');
       try {
-        // Use maybeSingle() instead of single() to avoid errors when no row is found
-        const { data: supabaseOrg, error } = await supabase
+        // 1) exact match
+        const exact = await supabase
           .from('organizations')
           .select('*')
-          .ilike('code', normalizedCode)
+          .eq('code', normalizedCode)
           .maybeSingle();
-        
-        if (error) {
-          console.log('Supabase lookup error:', error.code, error.message);
-          // Don't fail completely - the org might still be local-only
-        } else if (supabaseOrg) {
+
+        let supabaseOrg = exact.data;
+        if (exact.error) {
+          lastSupabaseError = `${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim();
+          console.log('Supabase exact lookup error:', exact.error.code, exact.error.message);
+        }
+
+        // 2) case-insensitive fallback
+        if (!supabaseOrg) {
+          const ci = await supabase
+            .from('organizations')
+            .select('*')
+            .ilike('code', normalizedCode)
+            .maybeSingle();
+          if (ci.error) {
+            lastSupabaseError = `${ci.error.code ?? ''} ${ci.error.message ?? ''}`.trim();
+            console.log('Supabase ilike lookup error:', ci.error.code, ci.error.message);
+          } else {
+            supabaseOrg = ci.data;
+          }
+        }
+
+        // 3) broad scan fallback (in case RLS returns but filter fails)
+        if (!supabaseOrg) {
+          const broad = await supabase
+            .from('organizations')
+            .select('id,name,code,logo_uri,primary_color,owner_id,created_at,expires_at')
+            .limit(500);
+          if (broad.error) {
+            lastSupabaseError = `${broad.error.code ?? ''} ${broad.error.message ?? ''}`.trim();
+            console.log('Supabase broad scan error:', broad.error.code, broad.error.message);
+          } else if (broad.data) {
+            const hit = broad.data.find(r => String(r.code).toUpperCase() === normalizedCode);
+            if (hit) supabaseOrg = hit as unknown as typeof supabaseOrg;
+          }
+        }
+
+        if (supabaseOrg) {
           console.log('Found organization in Supabase:', supabaseOrg.name, 'ID:', supabaseOrg.id);
           // Convert Supabase format to local format
           const fallbackExpiry = new Date(supabaseOrg.created_at);
@@ -457,9 +562,10 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     if (!org) {
       console.log('Organization not found with code:', code);
       const { Alert } = require('react-native') as typeof import('react-native');
+      const detail = lastSupabaseError ? `\n\nSupabase: ${lastSupabaseError}` : '';
       Alert.alert(
         'Organization not found',
-        `No organization was found with the code "${normalizedCode}".\n\nIf the admin just created this org on another device, ask them to confirm they saw "Organization created" without a "not synced to cloud" warning. If they did see that warning, the Supabase migration "012_allow_anon_org_join.sql" still needs to be applied.`
+        `No organization was found with the code "${normalizedCode}".\n\nAsk the admin to open the app, go to Settings → My Organizations, and tap "Sync to Cloud" next to this org. Then try again.${detail}`
       );
       return null;
     }
@@ -1145,6 +1251,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     createOrg,
     updateOrg,
     joinOrgByCode,
+    pushOrgToCloud,
     createTeam,
     createTeamsBulk,
     clearOrgTeams,
@@ -1180,7 +1287,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     orgData, currentOrg, currentEvent, currentOrgTeams, currentOrgEvents,
     currentEventTeams, currentEventVerifications, orgDataQuery.isLoading,
     isInitialized, isSaving, isOnline, offlineQueue.length,
-    selectOrg, selectEvent, createOrg, updateOrg, joinOrgByCode,
+    selectOrg, selectEvent, createOrg, updateOrg, joinOrgByCode, pushOrgToCloud,
     createTeam, createTeamsBulk, clearOrgTeams, getOrgByName,
     shouldOverwriteOrgData, importTeamsWithOrgCheck, updateTeam, deleteTeam,
     deleteOrg, leaveOrg, createEvent, updateEvent, deleteEvent, addTeamToEvent,

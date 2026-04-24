@@ -149,6 +149,7 @@ export default function SettingsScreen() {
     organizations,
     createOrg,
     joinOrgByCode,
+    pushOrgToCloud,
     selectOrg,
     deleteOrg,
     leaveOrg,
@@ -2469,17 +2470,34 @@ export default function SettingsScreen() {
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.orgShareShareBtn}
-                        onPress={() => {
+                        onPress={async () => {
+                          const result = await pushOrgToCloud(org.id);
                           const message = `Join ${org.name} on the Youth Sports Registration app!\n\nOrganization Code: ${org.code}\n\nEnter this code in the app to join our organization.`;
-                          Alert.alert('Share Code', message);
+                          if (!result.success) {
+                            Alert.alert('Share Code (not synced)', `${message}\n\nWarning: ${result.message}`);
+                          } else {
+                            Alert.alert('Share Code', message);
+                          }
                         }}
                         activeOpacity={0.7}
                       >
                         <Share2 size={16} color={Colors.primary} />
                       </TouchableOpacity>
                     </View>
+                    <TouchableOpacity
+                      style={styles.orgSyncCloudBtn}
+                      onPress={async () => {
+                        const result = await pushOrgToCloud(org.id);
+                        Alert.alert(result.success ? 'Synced to Cloud' : 'Sync Failed', result.message);
+                      }}
+                      activeOpacity={0.7}
+                      testID={`sync-org-${org.code}`}
+                    >
+                      <RefreshCw size={14} color={Colors.primary} />
+                      <Text style={styles.orgSyncCloudBtnText}>Sync to Cloud</Text>
+                    </TouchableOpacity>
                     <Text style={styles.orgShareCodeHint}>
-                      Share this code with others to let them join this organization
+                      Share this code with others to let them join this organization. If a tester can&apos;t join, tap &quot;Sync to Cloud&quot; above.
                     </Text>
                   </View>
 
@@ -4691,6 +4709,24 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#4ADE80',
     marginTop: 6,
+  },
+  orgSyncCloudBtn: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#DCFCE7',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  orgSyncCloudBtnText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: Colors.primary,
   },
   currentBadge: {
     backgroundColor: Colors.primary,
