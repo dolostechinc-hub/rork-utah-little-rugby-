@@ -173,6 +173,8 @@ export default function SettingsScreen() {
   const [showImportedSheetsModal, setShowImportedSheetsModal] = useState(false);
   const [showMyOrgsModal, setShowMyOrgsModal] = useState(false);
   const [orgError, setOrgError] = useState<string | null>(null);
+  const [syncAllStatus, setSyncAllStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
+  const [syncAllMessage, setSyncAllMessage] = useState<string | null>(null);
   const [pinInput, setPinInput] = useState('');
   const [currentPinInput, setCurrentPinInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
@@ -2376,6 +2378,37 @@ export default function SettingsScreen() {
         animationType="slide"
         presentationStyle="pageSheet"
         onRequestClose={() => setShowMyOrgsModal(false)}
+        onShow={() => {
+          (async () => {
+            if (organizations.length === 0) return;
+            console.log('[MyOrgsModal] auto-syncing all orgs on open...');
+            setSyncAllStatus('syncing');
+            setSyncAllMessage(null);
+            let okCount = 0;
+            let failCount = 0;
+            let lastErr: string | null = null;
+            for (const org of organizations) {
+              const res = await pushOrgToCloud(org.id);
+              if (res.success) {
+                okCount += 1;
+              } else {
+                failCount += 1;
+                lastErr = res.message;
+              }
+            }
+            if (failCount === 0) {
+              setSyncAllStatus('done');
+              setSyncAllMessage(`All ${okCount} organization${okCount === 1 ? '' : 's'} synced to cloud. Invite codes will work on any device.`);
+            } else {
+              setSyncAllStatus('error');
+              setSyncAllMessage(`${okCount} synced, ${failCount} failed. ${lastErr ?? ''}`);
+            }
+          })().catch((e) => {
+            console.log('[MyOrgsModal] auto-sync error', e);
+            setSyncAllStatus('error');
+            setSyncAllMessage(e instanceof Error ? e.message : String(e));
+          });
+        }}
       >
         <View style={styles.sheetsModalContainer}>
           <View style={styles.sheetsModalHeader}>
@@ -2393,6 +2426,79 @@ export default function SettingsScreen() {
             <Text style={styles.importedSheetsDescription}>
               Organizations you have created or joined. You can only delete organizations where you are the admin/owner.
             </Text>
+
+            {organizations.length > 0 && (
+              <View style={styles.syncAllBanner} testID="sync-all-banner">
+                <View style={styles.syncAllBannerHeader}>
+                  <RefreshCw
+                    size={18}
+                    color={
+                      syncAllStatus === 'error'
+                        ? Colors.error
+                        : syncAllStatus === 'done'
+                        ? Colors.primary
+                        : Colors.primary
+                    }
+                  />
+                  <Text style={styles.syncAllBannerTitle}>
+                    {syncAllStatus === 'syncing'
+                      ? 'Syncing organizations to cloud…'
+                      : syncAllStatus === 'done'
+                      ? 'Organizations synced to cloud'
+                      : syncAllStatus === 'error'
+                      ? 'Some organizations did not sync'
+                      : 'Cloud sync'}
+                  </Text>
+                </View>
+                <Text style={styles.syncAllBannerText}>
+                  {syncAllMessage ??
+                    'Tap “Sync All to Cloud” to make every invite code work for testers on other devices.'}
+                </Text>
+                <TouchableOpacity
+                  style={[
+                    styles.syncAllBannerButton,
+                    syncAllStatus === 'syncing' && styles.syncAllBannerButtonDisabled,
+                  ]}
+                  disabled={syncAllStatus === 'syncing'}
+                  onPress={async () => {
+                    setSyncAllStatus('syncing');
+                    setSyncAllMessage(null);
+                    let okCount = 0;
+                    let failCount = 0;
+                    let lastErr: string | null = null;
+                    for (const org of organizations) {
+                      const res = await pushOrgToCloud(org.id);
+                      if (res.success) okCount += 1;
+                      else {
+                        failCount += 1;
+                        lastErr = res.message;
+                      }
+                    }
+                    if (failCount === 0) {
+                      setSyncAllStatus('done');
+                      setSyncAllMessage(
+                        `All ${okCount} organization${okCount === 1 ? '' : 's'} synced to cloud. Invite codes will work on any device.`,
+                      );
+                      Alert.alert(
+                        'Synced to Cloud',
+                        `All ${okCount} organization${okCount === 1 ? '' : 's'} synced. Testers can now join with the invite code.`,
+                      );
+                    } else {
+                      setSyncAllStatus('error');
+                      setSyncAllMessage(`${okCount} synced, ${failCount} failed. ${lastErr ?? ''}`);
+                      Alert.alert('Sync partially failed', `${okCount} synced, ${failCount} failed.\n\n${lastErr ?? ''}`);
+                    }
+                  }}
+                  activeOpacity={0.7}
+                  testID="sync-all-orgs-button"
+                >
+                  <RefreshCw size={16} color={Colors.white} />
+                  <Text style={styles.syncAllBannerButtonText}>
+                    {syncAllStatus === 'syncing' ? 'Syncing…' : 'Sync All to Cloud'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {organizations.map((org) => {
               const orgMembers = members.filter(m => m.orgId === org.id);
@@ -4709,6 +4815,48 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#4ADE80',
     marginTop: 6,
+  },
+  syncAllBanner: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 14,
+    gap: 8,
+  },
+  syncAllBannerHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+  },
+  syncAllBannerTitle: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  syncAllBannerText: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    lineHeight: 17,
+  },
+  syncAllBannerButton: {
+    marginTop: 4,
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: Colors.primary,
+  },
+  syncAllBannerButtonDisabled: {
+    opacity: 0.6,
+  },
+  syncAllBannerButtonText: {
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: '700' as const,
   },
   orgSyncCloudBtn: {
     marginTop: 10,
