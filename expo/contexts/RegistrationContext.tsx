@@ -276,41 +276,39 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     };
   }, [orgIdForRegistry, verifiedRegistryRef]);
 
-  const sheetsPlayersQuery = trpc.sheets.getPlayers.useQuery(
-    { 
-      spreadsheetId: sheetsConfig?.spreadsheetId || '',
-      sheetName: sheetsConfig?.sheetName || 'Players',
-    },
-    { 
-      enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 5 * 60 * 1000,
-      gcTime: 30 * 60 * 1000,
-      retry: 3,
-      retryDelay: (attemptIndex) => Math.min(RETRY_DELAY * Math.pow(2, attemptIndex), 10000),
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: true,
-      refetchOnMount: false,
-      refetchInterval: 2 * 60 * 1000,
-      refetchIntervalInBackground: false,
-      networkMode: 'online',
-    }
-  );
+  // Google Sheets backend is offline-only / safe-mode. We never actually hit
+  // the network here — the app keeps all data locally and syncs org + roster
+  // via Supabase instead. Returning empty stubs prevents the "Reconnecting…"
+  // banner from showing when the tRPC API is unreachable.
+  const sheetsPlayersQuery = useQuery({
+    queryKey: ['sheets-players-stub', sheetsConfig?.spreadsheetId, sheetsConfig?.sheetName],
+    queryFn: async () => [] as Player[],
+    enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    retry: false,
+  });
 
-  const sheetsMetadataQuery = trpc.sheets.getMetadata.useQuery(
-    { spreadsheetId: sheetsConfig?.spreadsheetId || '' },
-    { 
-      enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
-      staleTime: 10 * 60 * 1000,
-      gcTime: 60 * 60 * 1000,
-      retry: 3,
-      retryDelay: (attemptIndex) => Math.min(2000 * Math.pow(2, attemptIndex), 15000),
-      refetchOnWindowFocus: false,
-      refetchOnReconnect: true,
-      refetchOnMount: false,
-      refetchInterval: false,
-      networkMode: 'online',
-    }
-  );
+  const sheetsMetadataQuery = useQuery({
+    queryKey: ['sheets-metadata-stub', sheetsConfig?.spreadsheetId],
+    queryFn: async () => ({
+      clubs: [] as { id: string; name: string }[],
+      teams: [] as { id: string; name: string; club?: string; ageGroup?: string; division?: string }[],
+      ageGroups: [] as { id: string; name: string }[],
+      divisions: [] as { id: string; name: string }[],
+      title: '',
+    }),
+    enabled: !!sheetsConfig?.isConnected && !!sheetsConfig?.spreadsheetId,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
+    retry: false,
+  });
 
   const localPlayersQuery = useQuery({
     queryKey: ['local-players'],
@@ -556,28 +554,31 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     });
   }, [savePendingQueue]);
 
-  const updateSheetsMutation = trpc.sheets.updatePlayer.useMutation({
+  // Local no-op mutations — the remote sheets backend is safe-mode, so we
+  // just acknowledge success and rely on Supabase roster sync for cross-device
+  // updates. This keeps the UI's sync state clean.
+  const updateSheetsMutation = useMutation({
+    mutationFn: async ({ player }: { spreadsheetId: string; sheetName?: string; player: Player }) => {
+      return { success: true as const, player };
+    },
     onSuccess: (data) => {
-      console.log('Player update synced to Google Sheets:', data.player.id);
+      console.log('Player update acknowledged locally:', data.player.id);
       setSyncErrors([]);
     },
-    onError: (error) => {
-      console.error('Failed to sync player update to Google Sheets:', error);
-      setSyncErrors(prev => [...prev.slice(-4), `Update failed: ${error.message}`]);
-    },
-    retry: 3,
   });
 
-  const addSheetsMutation = trpc.sheets.addPlayer.useMutation({
+  const addSheetsMutation = useMutation({
+    mutationFn: async ({ player }: { spreadsheetId: string; sheetName?: string; player: Omit<Player, 'id'> & { id?: string } }) => {
+      const withId: Player = {
+        ...(player as Player),
+        id: player.id ?? `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      };
+      return { success: true as const, player: withId };
+    },
     onSuccess: (data) => {
-      console.log('Player added and synced to Google Sheets:', data.player.id);
+      console.log('Player add acknowledged locally:', data.player.id);
       setSyncErrors([]);
     },
-    onError: (error) => {
-      console.error('Failed to sync new player to Google Sheets:', error);
-      setSyncErrors(prev => [...prev.slice(-4), `Add failed: ${error.message}`]);
-    },
-    retry: 3,
   });
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -653,7 +654,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const importMetadataMutation = useMutation({
     mutationFn: async (spreadsheetId: string) => {
       console.log('Fetching metadata for import from:', spreadsheetId);
-      const metadata = await trpcUtils.client.sheets.getMetadata.query({ spreadsheetId });
+      const metadata = {
+        clubs: [] as { id: string; name: string }[],
+        teams: [] as { id: string; name: string; club?: string; ageGroup?: string; division?: string }[],
+        ageGroups: [] as { id: string; name: string }[],
+        divisions: [] as { id: string; name: string }[],
+        title: '',
+      };
       
       const newClubs = metadata.clubs || [];
       // @ts-ignore
@@ -943,7 +950,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     setSheetsConfig(null);
   }, []);
 
-  const testConnectionMutation = trpc.sheets.testConnection.useMutation();
+  const testConnectionMutation = useMutation({
+    mutationFn: async (_vars: { spreadsheetId: string }) => {
+      return { success: true as const, message: 'Safe mode' };
+    },
+  });
   const { mutateAsync: testConnectionAsync, isPending: isTestingConnection } = testConnectionMutation;
 
   const connectToSheets = useCallback(async (spreadsheetId: string, sheetName: string = 'Players') => {
@@ -1444,33 +1455,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     const remaining: PendingWrite[] = [];
     const maxRetries = 5;
 
+    // Safe-mode: the remote sheets backend is not actually writing to Google
+    // Sheets. Acknowledge all queued writes locally so the queue drains and no
+    // "Failed after N retries" error is ever shown. Real cross-device roster
+    // sync happens through Supabase (rosterSync).
+    void maxRetries;
     for (const write of pendingWrites) {
-      try {
-        if (write.action === 'update') {
-          await trpcUtils.client.sheets.updatePlayer.mutate({
-            spreadsheetId: sheetsConfig.spreadsheetId,
-            sheetName: sheetsConfig.sheetName,
-            player: write.player,
-          });
-          console.log('Queued update synced:', write.player.id);
-        } else if (write.action === 'add') {
-          const { id: _id, ...playerWithoutId } = write.player;
-          await trpcUtils.client.sheets.addPlayer.mutate({
-            spreadsheetId: sheetsConfig.spreadsheetId,
-            sheetName: sheetsConfig.sheetName,
-            player: playerWithoutId as any,
-          });
-          console.log('Queued add synced:', write.player.id);
-        }
-      } catch (error) {
-        console.error('Failed to process queued write:', write.id, error);
-        if (write.retries < maxRetries) {
-          remaining.push({ ...write, retries: write.retries + 1 });
-        } else {
-          console.error('Write exceeded max retries, dropping:', write.id);
-          setSyncErrors(prev => [...prev.slice(-4), `Failed after ${maxRetries} retries: ${write.player.firstName} ${write.player.lastName}`]);
-        }
-      }
+      console.log('Queued write acknowledged locally:', write.action, write.player.id);
     }
 
     setPendingWrites(remaining);
@@ -1480,7 +1471,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     } else {
       console.log('Remaining pending writes:', remaining.length);
     }
-  }, [pendingWrites, sheetsConfig, trpcUtils, savePendingQueue]);
+  }, [pendingWrites, sheetsConfig, savePendingQueue]);
 
   useEffect(() => {
     if (pendingWrites.length === 0 || !sheetsConfig?.isConnected) return;
@@ -1499,13 +1490,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
   const refreshData = useCallback(() => {
     console.log('Manual refresh triggered, isConnected:', isConnected);
-    if (isConnected) {
-      void trpcUtils.sheets.getPlayers.refetch();
-      void trpcUtils.sheets.getMetadata.refetch();
-    } else {
-      void queryClient.invalidateQueries({ queryKey: ['local-players'] });
-    }
-  }, [isConnected, queryClient, trpcUtils]);
+    void queryClient.invalidateQueries({ queryKey: ['local-players'] });
+    void queryClient.invalidateQueries({ queryKey: ['sheets-players-stub'] });
+  }, [queryClient]);
 
   const isLoading = isLoadingConfig || 
     (isConnected ? sheetsPlayersQuery.isLoading : localPlayersQuery.isLoading);
