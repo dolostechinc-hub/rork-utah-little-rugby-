@@ -184,12 +184,15 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     [],
   );
 
-  const revokeEditorPin = useCallback(async (pinId: string): Promise<void> => {
-    await revokeEditorPinRPC(pinId);
-  }, []);
+  const revokeEditorPin = useCallback(
+    async (pinId: string, adminUserId?: string): Promise<void> => {
+      await revokeEditorPinRPC(pinId, adminUserId);
+    },
+    [],
+  );
 
-  const revokeAllEditorAccess = useCallback(async (orgId: string): Promise<void> => {
-    await revokeAllEditorAccessRPC(orgId);
+  const revokeAllEditorAccess = useCallback(async (orgId: string, adminUserId?: string): Promise<void> => {
+    await revokeAllEditorAccessRPC(orgId, adminUserId);
     if (role === 'editor') {
       setRole('viewer');
       await AsyncStorage.removeItem(AUTH_STATE_KEY);

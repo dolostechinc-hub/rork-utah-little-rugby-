@@ -561,6 +561,7 @@ export default function SettingsScreen() {
       const { pin, expiresAt } = await issueEditorPin(currentOrg.id, {
         expiresInMinutes: 480,
         label: editorPinInput || undefined,
+        adminUserId: currentOrg.ownerId,
       });
       setShowEditorPinModal(false);
       setAdminVerifyPin('');
@@ -603,7 +604,7 @@ export default function SettingsScreen() {
       return;
     }
     try {
-      await revokeAllEditorAccess(currentOrg.id);
+      await revokeAllEditorAccess(currentOrg.id, currentOrg.ownerId);
       setShowRevokeModal(false);
       setAdminVerifyPin('');
       Alert.alert('Editor Access Revoked', 'All editor PINs and sessions have been revoked.');
@@ -719,7 +720,7 @@ export default function SettingsScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await revokeAllEditorAccess(currentOrg.id);
+              await revokeAllEditorAccess(currentOrg.id, currentOrg.ownerId);
               Alert.alert('Sessions Revoked', 'All editor sessions have been logged out.');
             } catch (err) {
               Alert.alert('Error', (err as Error).message);
@@ -1350,8 +1351,8 @@ export default function SettingsScreen() {
                           onPress: async () => {
                             try {
                               if (!currentOrg) throw new Error('Select an organization first');
-                              await revokeAllEditorAccess(currentOrg.id);
-                              const { pin: newPin } = await issueEditorPin(currentOrg.id, { expiresInMinutes: 480 });
+                              await revokeAllEditorAccess(currentOrg.id, currentOrg.ownerId);
+                              const { pin: newPin } = await issueEditorPin(currentOrg.id, { expiresInMinutes: 480, adminUserId: currentOrg.ownerId });
                               await setEventMode('viewOnly');
                               Alert.alert(
                                 'Event Locked',

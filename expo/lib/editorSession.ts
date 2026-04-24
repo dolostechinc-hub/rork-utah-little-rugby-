@@ -122,9 +122,13 @@ export async function issueEditorPin(
   return { pin: res.pin, pinId: res.pin_id ?? '', expiresAt: res.expires_at ?? '' };
 }
 
-export async function revokeAllEditorAccess(orgId: string): Promise<void> {
+export async function revokeAllEditorAccess(
+  orgId: string,
+  adminUserId?: string,
+): Promise<void> {
   const { data, error } = await supabase.rpc('revoke_all_editor_access', {
     p_org_id: orgId,
+    p_admin_user_id: adminUserId ?? null,
   });
   if (error) throw new Error(error.message);
   const res = data as { error?: string };
@@ -132,8 +136,14 @@ export async function revokeAllEditorAccess(orgId: string): Promise<void> {
   await clearEditorSession();
 }
 
-export async function revokeEditorPin(pinId: string): Promise<void> {
-  const { data, error } = await supabase.rpc('revoke_editor_pin', { p_pin_id: pinId });
+export async function revokeEditorPin(
+  pinId: string,
+  adminUserId?: string,
+): Promise<void> {
+  const { data, error } = await supabase.rpc('revoke_editor_pin', {
+    p_pin_id: pinId,
+    p_admin_user_id: adminUserId ?? null,
+  });
   if (error) throw new Error(error.message);
   const res = data as { error?: string };
   if (res?.error) throw new Error(res.error);
