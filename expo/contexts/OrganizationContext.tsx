@@ -313,6 +313,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     expiresAt.setMonth(expiresAt.getMonth() + 4);
     
     let savedToSupabase = false;
+    let supabaseErrorMsg: string | null = null;
     try {
       const { data: supabaseOrg, error } = await supabase
         .from('organizations')
@@ -329,6 +330,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
         .single();
       
       if (error) {
+        supabaseErrorMsg = `${error.code ?? ''} ${error.message ?? ''}`.trim();
         console.error('Failed to save org to Supabase:', error.message, error.code, error.details);
       } else {
         console.log('Organization saved to Supabase successfully:', supabaseOrg.id);
@@ -351,11 +353,20 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
         }
       }
     } catch (err) {
+      supabaseErrorMsg = err instanceof Error ? err.message : String(err);
       console.error('Supabase error during org creation:', err);
     }
     
     if (!savedToSupabase) {
       console.warn('Organization NOT saved to Supabase - join codes will only work on this device');
+      const detail = supabaseErrorMsg
+        ? `\n\nDetails: ${supabaseErrorMsg}`
+        : '';
+      const { Alert } = require('react-native') as typeof import('react-native');
+      Alert.alert(
+        'Organization not synced to cloud',
+        `The organization was created on this device, but could NOT be saved to the cloud. Other people will not be able to join with the invite code until this is fixed.\n\nUsually this means the Supabase RLS migration "012_allow_anon_org_join.sql" has not been applied. Ask the developer to run it in the Supabase SQL editor.${detail}`
+      );
     }
     const org: Organization = {
       id: orgId,
@@ -445,6 +456,11 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     
     if (!org) {
       console.log('Organization not found with code:', code);
+      const { Alert } = require('react-native') as typeof import('react-native');
+      Alert.alert(
+        'Organization not found',
+        `No organization was found with the code "${normalizedCode}".\n\nIf the admin just created this org on another device, ask them to confirm they saw "Organization created" without a "not synced to cloud" warning. If they did see that warning, the Supabase migration "012_allow_anon_org_join.sql" still needs to be applied.`
+      );
       return null;
     }
 
