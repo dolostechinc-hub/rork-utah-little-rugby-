@@ -4,6 +4,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useCallback, useEffect, } from 'react';
 import { supabase } from '@/lib/supabase';
 import {
+  restLookupOrgByCode,
+  restUpsertOrg,
+  restUpsertOrgWithRetry,
+  restUpsertMember,
+  restJoinOrg,
+  type RemoteOrg,
+} from '@/lib/orgCloudSync';
+import {
   Organization,
   Team,
   Event,
@@ -168,60 +176,59 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
 
   const orgData = orgDataQuery.data || DEFAULT_ORG_DATA;
 
+  const [unsyncedOrgIds, setUnsyncedOrgIds] = useState<string[]>([]);
+
   useEffect(() => {
     if (!isInitialized || !isOnline) return;
     if (!orgData.organizations.length) return;
 
     let cancelled = false;
+    let fastTicks = 0;
 
     const syncLocalOrgsToSupabase = async () => {
       try {
-        console.log('[syncOrgs] auto-sync starting for', orgData.organizations.length, 'local orgs');
+        console.log('[syncOrgs] auto-sync pass for', orgData.organizations.length, 'local orgs');
+        const stillUnsynced: string[] = [];
 
         for (const org of orgData.organizations) {
           if (cancelled) return;
 
-          // Verify via the same RPC testers will use. This is the ground truth.
-          const verify = await supabase.rpc('public_lookup_org_by_code', { p_code: org.code });
-          const verifiedRow = Array.isArray(verify.data) ? verify.data[0] : verify.data;
-          if (verify.error) {
-            console.log('[syncOrgs] RPC lookup error for', org.code, verify.error.code, verify.error.message);
-          }
-
-          const needsUpload = !verifiedRow || verifiedRow.id !== org.id;
-          if (!needsUpload) {
+          const lookup = await restLookupOrgByCode(org.code);
+          if (lookup.ok && lookup.org && lookup.org.id === org.id) {
             console.log('[syncOrgs] already in cloud:', org.code);
             continue;
           }
+          if (!lookup.ok) {
+            console.log('[syncOrgs] lookup error for', org.code, lookup.error);
+          }
 
-          console.log('[syncOrgs] uploading org via RPC:', org.code, org.name);
-          const rpc = await supabase.rpc('public_upsert_organization', {
-            p_id: org.id,
-            p_name: org.name,
-            p_code: org.code,
-            p_logo_uri: org.logoUri ?? null,
-            p_primary_color: org.primaryColor ?? '#0B7A4B',
-            p_owner_id: org.ownerId,
-            p_expires_at: org.expiresAt ?? null,
-            p_created_at: org.createdAt,
-          });
+          console.log('[syncOrgs] uploading via REST:', org.code, org.name);
+          const upload = await restUpsertOrgWithRetry({
+            id: org.id,
+            name: org.name,
+            code: org.code,
+            logoUri: org.logoUri ?? null,
+            primaryColor: org.primaryColor ?? '#0B7A4B',
+            ownerId: org.ownerId,
+            expiresAt: org.expiresAt ?? null,
+            createdAt: org.createdAt,
+          }, { attempts: 3, baseDelayMs: 600 });
 
-          if (rpc.error) {
-            console.warn('[syncOrgs] RPC upload failed for', org.code, rpc.error.code, rpc.error.message, '- trying direct upsert');
-            const { error: orgErr } = await supabase
-              .from('organizations')
-              .upsert({
-                id: org.id,
-                name: org.name,
-                code: org.code,
-                logo_uri: org.logoUri ?? null,
-                primary_color: org.primaryColor ?? '#0B7A4B',
-                owner_id: org.ownerId,
-                expires_at: org.expiresAt ?? null,
-                created_at: org.createdAt,
-              }, { onConflict: 'id' });
-            if (orgErr) {
-              console.warn('[syncOrgs] direct upsert also failed for', org.code, orgErr.code, orgErr.message);
+          if (!upload.ok) {
+            console.warn('[syncOrgs] REST upload failed for', org.code, upload.error, '- trying supabase-js fallback');
+            const rpc = await supabase.rpc('public_upsert_organization', {
+              p_id: org.id,
+              p_name: org.name,
+              p_code: org.code,
+              p_logo_uri: org.logoUri ?? null,
+              p_primary_color: org.primaryColor ?? '#0B7A4B',
+              p_owner_id: org.ownerId,
+              p_expires_at: org.expiresAt ?? null,
+              p_created_at: org.createdAt,
+            });
+            if (rpc.error) {
+              console.warn('[syncOrgs] supabase-js upsert failed for', org.code, rpc.error.message);
+              stillUnsynced.push(org.id);
               continue;
             }
           }
@@ -229,31 +236,51 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
 
           const orgMembers = orgData.members.filter(m => m.orgId === org.id);
           for (const m of orgMembers) {
-            const memRpc = await supabase.rpc('public_upsert_org_member', {
-              p_id: m.id,
-              p_org_id: m.orgId,
-              p_user_id: m.userId,
-              p_role: m.role,
-              p_email: m.email ?? '',
-              p_name: m.name ?? '',
-              p_joined_at: m.joinedAt,
+            const memRes = await restUpsertMember({
+              id: m.id,
+              orgId: m.orgId,
+              userId: m.userId,
+              role: m.role,
+              email: m.email ?? '',
+              name: m.name ?? '',
+              joinedAt: m.joinedAt,
             });
-            if (memRpc.error) {
-              console.warn('[syncOrgs] member RPC failed for', m.id, memRpc.error.message);
+            if (!memRes.ok) {
+              console.warn('[syncOrgs] member REST upsert failed for', m.id, memRes.error);
             }
           }
         }
-        console.log('[syncOrgs] auto-sync complete');
+
+        if (!cancelled) {
+          setUnsyncedOrgIds(stillUnsynced);
+          console.log('[syncOrgs] pass complete. unsynced remaining:', stillUnsynced.length);
+        }
       } catch (err) {
         console.log('[syncOrgs] sync failed:', err);
       }
     };
 
     void syncLocalOrgsToSupabase();
-    const intervalId = setInterval(() => {
+
+    const tick = () => {
+      if (cancelled) return;
+      fastTicks += 1;
+      void syncLocalOrgsToSupabase();
+    };
+    const fastId = setInterval(tick, 5_000);
+    const slowTimeoutId = setTimeout(() => {
+      clearInterval(fastId);
+    }, 120_000);
+    const slowId = setInterval(() => {
       if (!cancelled) void syncLocalOrgsToSupabase();
     }, 60_000);
-    return () => { cancelled = true; clearInterval(intervalId); };
+
+    return () => {
+      cancelled = true;
+      clearInterval(fastId);
+      clearInterval(slowId);
+      clearTimeout(slowTimeoutId);
+    };
   }, [isInitialized, isOnline, orgData.organizations, orgData.members]);
 
   const currentOrg = useMemo(() => {
@@ -323,89 +350,79 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     
     let savedToSupabase = false;
     let supabaseErrorMsg: string | null = null;
+    const ownerMemberId = generateUUID();
     try {
-      // Prefer the SECURITY DEFINER RPC (bypasses RLS entirely).
-      const rpc = await supabase.rpc('public_upsert_organization', {
-        p_id: orgId,
-        p_name: name,
-        p_code: orgCode,
-        p_logo_uri: null,
-        p_primary_color: primaryColor || '#0B7A4B',
-        p_owner_id: ownerUUID,
-        p_expires_at: expiresAt.toISOString(),
-        p_created_at: new Date().toISOString(),
-      });
+      const upload = await restUpsertOrgWithRetry({
+        id: orgId,
+        name,
+        code: orgCode,
+        logoUri: null,
+        primaryColor: primaryColor || '#0B7A4B',
+        ownerId: ownerUUID,
+        expiresAt: expiresAt.toISOString(),
+        createdAt: new Date().toISOString(),
+      }, { attempts: 6, baseDelayMs: 800 });
 
-      if (rpc.error) {
-        console.warn('[createOrg] RPC upsert failed, falling back to direct insert:', rpc.error.code, rpc.error.message);
-        const { data: supabaseOrg, error } = await supabase
-          .from('organizations')
-          .insert({
-            id: orgId,
-            name,
-            code: orgCode,
-            logo_uri: null,
-            primary_color: primaryColor || '#0B7A4B',
-            owner_id: ownerUUID,
-            expires_at: expiresAt.toISOString(),
-          })
-          .select()
-          .single();
-
-        if (error) {
-          supabaseErrorMsg = `${error.code ?? ''} ${error.message ?? ''}`.trim();
-          console.error('Failed to save org to Supabase:', error.message, error.code, error.details);
-        } else {
-          console.log('Organization saved to Supabase (direct insert):', supabaseOrg.id);
-          savedToSupabase = true;
-        }
-      } else {
-        console.log('Organization saved to Supabase via RPC:', orgId);
+      if (upload.ok) {
+        console.log('[createOrg] Organization saved + verified in Supabase:', orgId);
         savedToSupabase = true;
+      } else {
+        supabaseErrorMsg = upload.error;
+        console.warn('[createOrg] REST upsert failed after retries:', upload.error, '- trying supabase-js');
+        const rpc = await supabase.rpc('public_upsert_organization', {
+          p_id: orgId,
+          p_name: name,
+          p_code: orgCode,
+          p_logo_uri: null,
+          p_primary_color: primaryColor || '#0B7A4B',
+          p_owner_id: ownerUUID,
+          p_expires_at: expiresAt.toISOString(),
+          p_created_at: new Date().toISOString(),
+        });
+        if (!rpc.error) {
+          const verify = await restLookupOrgByCode(orgCode);
+          if (verify.ok && verify.org && verify.org.id === orgId) {
+            savedToSupabase = true;
+            supabaseErrorMsg = null;
+          } else {
+            supabaseErrorMsg = verify.ok
+              ? 'upsert ok but verify returned no row'
+              : verify.error;
+          }
+        } else {
+          supabaseErrorMsg = `${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim();
+        }
       }
 
       if (savedToSupabase) {
-        const memberRpc = await supabase.rpc('public_upsert_org_member', {
-          p_id: generateUUID(),
-          p_org_id: orgId,
-          p_user_id: ownerUUID,
-          p_role: 'owner',
-          p_email: '',
-          p_name: 'Owner',
-          p_joined_at: new Date().toISOString(),
+        const memRes = await restUpsertMember({
+          id: ownerMemberId,
+          orgId,
+          userId: ownerUUID,
+          role: 'owner',
+          email: '',
+          name: 'Owner',
+          joinedAt: new Date().toISOString(),
         });
-        if (memberRpc.error) {
-          console.warn('[createOrg] member RPC failed, trying direct insert:', memberRpc.error.message);
-          const { error: memberError } = await supabase
-            .from('org_members')
-            .insert({
-              org_id: orgId,
-              user_id: ownerUUID,
-              role: 'owner',
-              email: '',
-              name: 'Owner',
-            });
-          if (memberError) {
-            console.warn('Failed to save owner member to Supabase:', memberError.message);
-          }
-        } else {
-          console.log('Owner member saved to Supabase via RPC');
+        if (!memRes.ok) {
+          console.warn('[createOrg] owner member upsert failed (non-fatal):', memRes.error);
         }
       }
     } catch (err) {
       supabaseErrorMsg = err instanceof Error ? err.message : String(err);
       console.error('Supabase error during org creation:', err);
     }
-    
+
     if (!savedToSupabase) {
-      console.warn('Organization NOT saved to Supabase - join codes will only work on this device');
+      console.warn('Organization NOT saved to Supabase - will keep retrying in background');
+      setUnsyncedOrgIds((prev) => (prev.includes(orgId) ? prev : [...prev, orgId]));
       const detail = supabaseErrorMsg
         ? `\n\nDetails: ${supabaseErrorMsg}`
         : '';
       const { Alert } = require('react-native') as typeof import('react-native');
       Alert.alert(
-        'Organization not synced to cloud',
-        `The organization was created on this device, but could NOT be saved to the cloud. Other people will not be able to join with the invite code until this is fixed.\n\nAsk the developer to run migration "013_join_org_rpc.sql" in the Supabase SQL editor.${detail}`
+        'Organization created (offline)',
+        `Created locally but could not reach the cloud right now. The app will keep retrying automatically in the background. Invite codes will start working as soon as sync succeeds.${detail}`
       );
     }
     const org: Organization = {
@@ -420,7 +437,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     };
 
     const ownerMember: OrgMember = {
-      id: generateUUID(),
+      id: ownerMemberId,
       orgId: org.id,
       userId: ownerUUID,
       role: 'owner',
@@ -447,72 +464,63 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     }
     console.log('[pushOrgToCloud] pushing org', org.code, org.id);
     try {
-      // Prefer RPC (bypasses RLS via SECURITY DEFINER).
-      const rpc = await supabase.rpc('public_upsert_organization', {
-        p_id: org.id,
-        p_name: org.name,
-        p_code: org.code,
-        p_logo_uri: org.logoUri ?? null,
-        p_primary_color: org.primaryColor ?? '#0B7A4B',
-        p_owner_id: org.ownerId,
-        p_expires_at: org.expiresAt ?? null,
-        p_created_at: org.createdAt,
-      });
+      const upload = await restUpsertOrgWithRetry({
+        id: org.id,
+        name: org.name,
+        code: org.code,
+        logoUri: org.logoUri ?? null,
+        primaryColor: org.primaryColor ?? '#0B7A4B',
+        ownerId: org.ownerId,
+        expiresAt: org.expiresAt ?? null,
+        createdAt: org.createdAt,
+      }, { attempts: 5, baseDelayMs: 700 });
 
-      if (rpc.error) {
-        console.warn('[pushOrgToCloud] RPC upsert failed, trying direct upsert:', rpc.error.code, rpc.error.message);
-        const { error: orgErr } = await supabase
-          .from('organizations')
-          .upsert({
-            id: org.id,
-            name: org.name,
-            code: org.code,
-            logo_uri: org.logoUri ?? null,
-            primary_color: org.primaryColor ?? '#0B7A4B',
-            owner_id: org.ownerId,
-            expires_at: org.expiresAt ?? null,
-            created_at: org.createdAt,
-          }, { onConflict: 'id' });
-
-        if (orgErr) {
-          console.warn('[pushOrgToCloud] org upsert failed:', orgErr.code, orgErr.message);
+      if (!upload.ok) {
+        console.warn('[pushOrgToCloud] REST upload failed, trying supabase-js:', upload.error);
+        const rpc = await supabase.rpc('public_upsert_organization', {
+          p_id: org.id,
+          p_name: org.name,
+          p_code: org.code,
+          p_logo_uri: org.logoUri ?? null,
+          p_primary_color: org.primaryColor ?? '#0B7A4B',
+          p_owner_id: org.ownerId,
+          p_expires_at: org.expiresAt ?? null,
+          p_created_at: org.createdAt,
+        });
+        if (rpc.error) {
           return {
             success: false,
-            message: `Could not sync to cloud.\n\nSupabase: ${orgErr.code ?? ''} ${orgErr.message ?? ''}\n\nRun the SQL migration "013_join_org_rpc.sql" in the Supabase SQL editor.`,
+            message: `Could not sync to cloud.\n\nREST: ${upload.error}\nsupabase-js: ${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`,
           };
         }
       }
 
-      // Verify via the same RPC testers will use.
-      const { data: verify, error: verifyErr } = await supabase.rpc('public_lookup_org_by_code', {
-        p_code: org.code,
-      });
-
-      if (verifyErr) {
-        return { success: false, message: `Uploaded, but readback failed: ${verifyErr.message}. Run migration "013_join_org_rpc.sql".` };
+      const verify = await restLookupOrgByCode(org.code);
+      if (!verify.ok) {
+        return { success: false, message: `Uploaded, but readback failed: ${verify.error}` };
       }
-      const verifiedRow = Array.isArray(verify) ? verify[0] : verify;
+      const verifiedRow = verify.org;
       if (!verifiedRow) {
-        return { success: false, message: 'Uploaded, but the org is not visible via the join-by-code RPC. Run migration "013_join_org_rpc.sql" in the Supabase SQL editor.' };
+        return { success: false, message: 'Uploaded, but the org is not visible via the join-by-code RPC.' };
       }
 
-      // Also upsert members for this org so admins/owners are recognized in the cloud
       const orgMembers = orgData.members.filter(m => m.orgId === org.id);
       for (const m of orgMembers) {
-        const memRpc = await supabase.rpc('public_upsert_org_member', {
-          p_id: m.id,
-          p_org_id: m.orgId,
-          p_user_id: m.userId,
-          p_role: m.role,
-          p_email: m.email ?? '',
-          p_name: m.name ?? '',
-          p_joined_at: m.joinedAt,
+        const memRes = await restUpsertMember({
+          id: m.id,
+          orgId: m.orgId,
+          userId: m.userId,
+          role: m.role,
+          email: m.email ?? '',
+          name: m.name ?? '',
+          joinedAt: m.joinedAt,
         });
-        if (memRpc.error) {
-          console.warn('[pushOrgToCloud] member RPC failed for', m.id, memRpc.error.message);
+        if (!memRes.ok) {
+          console.warn('[pushOrgToCloud] member REST upsert failed for', m.id, memRes.error);
         }
       }
 
+      setUnsyncedOrgIds((prev) => prev.filter((id) => id !== org.id));
       return { success: true, message: `"${verifiedRow.name}" is now synced to the cloud. Invite code ${verifiedRow.code} will work on any device.` };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -538,28 +546,29 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     console.log('Local lookup result:', org ? `Found: ${org.name}` : 'Not found locally');
     
     let lastSupabaseError: string | null = null;
-    // If not found locally, try to fetch from Supabase (try multiple strategies)
     if (!org) {
-      console.log('Organization not found locally, checking Supabase...');
+      console.log('Organization not found locally, checking Supabase via REST...');
       try {
-        type RemoteOrg = {
-          id: string; name: string; code: string;
-          logo_uri: string | null; primary_color: string | null;
-          owner_id: string; created_at: string; expires_at: string | null;
-        };
         let supabaseOrg: RemoteOrg | null = null;
 
-        // 0) Preferred: SECURITY DEFINER RPC (bypasses RLS entirely)
-        const rpc = await supabase.rpc('public_lookup_org_by_code', { p_code: normalizedCode });
-        if (rpc.error) {
-          lastSupabaseError = `${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim();
-          console.log('Supabase RPC lookup error:', rpc.error.code, rpc.error.message);
-        } else if (rpc.data && Array.isArray(rpc.data) && rpc.data.length > 0) {
-          supabaseOrg = rpc.data[0] as RemoteOrg;
-          console.log('[joinOrg] found via RPC:', supabaseOrg.name);
+        const restRes = await restLookupOrgByCode(normalizedCode);
+        if (restRes.ok) {
+          supabaseOrg = restRes.org;
+          if (supabaseOrg) console.log('[joinOrg] found via REST:', supabaseOrg.name);
+        } else {
+          lastSupabaseError = restRes.error;
+          console.log('[joinOrg] REST lookup error:', restRes.error);
         }
 
-        // 1) exact match fallback
+        if (!supabaseOrg) {
+          const rpc = await supabase.rpc('public_lookup_org_by_code', { p_code: normalizedCode });
+          if (rpc.error) {
+            lastSupabaseError = `${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim();
+          } else if (rpc.data && Array.isArray(rpc.data) && rpc.data.length > 0) {
+            supabaseOrg = rpc.data[0] as RemoteOrg;
+          }
+        }
+
         if (!supabaseOrg) {
           const exact = await supabase
             .from('organizations')
@@ -568,13 +577,11 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             .maybeSingle();
           if (exact.error) {
             lastSupabaseError = `${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim();
-            console.log('Supabase exact lookup error:', exact.error.code, exact.error.message);
           } else {
             supabaseOrg = (exact.data as RemoteOrg | null) ?? null;
           }
         }
 
-        // 2) case-insensitive fallback
         if (!supabaseOrg) {
           const ci = await supabase
             .from('organizations')
@@ -583,24 +590,22 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             .maybeSingle();
           if (ci.error) {
             lastSupabaseError = `${ci.error.code ?? ''} ${ci.error.message ?? ''}`.trim();
-            console.log('Supabase ilike lookup error:', ci.error.code, ci.error.message);
           } else {
             supabaseOrg = (ci.data as RemoteOrg | null) ?? null;
           }
         }
 
-        // 3) broad scan fallback (in case RLS returns but filter fails)
         if (!supabaseOrg) {
-          const broad = await supabase
-            .from('organizations')
-            .select('id,name,code,logo_uri,primary_color,owner_id,created_at,expires_at')
-            .limit(500);
-          if (broad.error) {
-            lastSupabaseError = `${broad.error.code ?? ''} ${broad.error.message ?? ''}`.trim();
-            console.log('Supabase broad scan error:', broad.error.code, broad.error.message);
-          } else if (broad.data) {
-            const hit = (broad.data as RemoteOrg[]).find(r => String(r.code).toUpperCase() === normalizedCode);
-            if (hit) supabaseOrg = hit;
+          const joinRes = await restJoinOrg({
+            code: normalizedCode,
+            userId: generateUUID(),
+            name: userName || 'Volunteer',
+            email: email || '',
+          });
+          if (joinRes.ok && joinRes.org) {
+            supabaseOrg = joinRes.org;
+          } else if (!joinRes.ok) {
+            lastSupabaseError = joinRes.error;
           }
         }
 
@@ -1330,6 +1335,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     isSaving,
     isOnline,
     offlineQueueCount: offlineQueue.length,
+    unsyncedOrgIds,
     selectOrg,
     selectEvent,
     createOrg,
@@ -1370,7 +1376,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
   }), [
     orgData, currentOrg, currentEvent, currentOrgTeams, currentOrgEvents,
     currentEventTeams, currentEventVerifications, orgDataQuery.isLoading,
-    isInitialized, isSaving, isOnline, offlineQueue.length,
+    isInitialized, isSaving, isOnline, offlineQueue.length, unsyncedOrgIds,
     selectOrg, selectEvent, createOrg, updateOrg, joinOrgByCode, pushOrgToCloud,
     createTeam, createTeamsBulk, clearOrgTeams, getOrgByName,
     shouldOverwriteOrgData, importTeamsWithOrgCheck, updateTeam, deleteTeam,
