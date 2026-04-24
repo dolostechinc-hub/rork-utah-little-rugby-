@@ -198,9 +198,40 @@ export default function RosterScreen() {
   }, [handlePlayerPress]);
 
   const availableTeams = useMemo(() => {
-    if (!selectedClub) return teamNames;
-    return teamNames.filter(t => t.club === selectedClub);
-  }, [teamNames, selectedClub]);
+    const normalizeAge = (s: string | null | undefined) =>
+      (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
+    const normalize = (s: string | null | undefined) => (s || '').toString().trim().toLowerCase();
+
+    const targetClub = normalize(selectedClub);
+    const targetAge = normalizeAge(selectedAgeGroup);
+    const targetDivision = normalize(selectedDivision);
+
+    const filtered = teamNames.filter((t) => {
+      if (targetClub && normalize(t.club) !== targetClub) return false;
+      if (targetAge && normalizeAge(t.ageGroup) !== targetAge) return false;
+      if (targetDivision && normalize(t.division) !== targetDivision) return false;
+      return true;
+    });
+
+    const seen = new Set<string>();
+    const unique: typeof teamNames = [];
+    for (const t of filtered) {
+      const key = normalize(t.name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      unique.push(t);
+    }
+    return unique;
+  }, [teamNames, selectedClub, selectedAgeGroup, selectedDivision]);
+
+  React.useEffect(() => {
+    if (!selectedTeamName) return;
+    const stillValid = availableTeams.some((t) => t.name === selectedTeamName);
+    if (!stillValid) {
+      console.log('[roster] clearing team filter because it no longer matches filters');
+      setSelectedTeamName(null);
+    }
+  }, [availableTeams, selectedTeamName]);
 
   if (isLoading) {
     return (
@@ -251,7 +282,7 @@ export default function RosterScreen() {
         </TouchableOpacity>
       </View>
 
-      {showFilters && (
+      {(showFilters || hasActiveFilters) && (
         <View style={styles.filtersContainer}>
           <View style={styles.filterRow}>
             <FilterDropdown
@@ -290,11 +321,11 @@ export default function RosterScreen() {
           {teamNames.length > 0 && (
             <View style={styles.filterRowSecond}>
               <FilterDropdown
-                label="Team"
+                label={`Team${availableTeams.length > 0 ? ` (${availableTeams.length})` : ''}`}
                 value={selectedTeamName}
                 options={availableTeams}
                 onSelect={setSelectedTeamName}
-                placeholder="All Teams"
+                placeholder={availableTeams.length === 0 ? 'No teams match' : 'All Teams'}
               />
             </View>
           )}

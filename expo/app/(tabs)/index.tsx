@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -38,8 +38,42 @@ export default function CheckInScreen() {
 
   const [refreshing, setRefreshing] = React.useState(false);
 
-  // Use teams from context directly
-  const teamNames = teams;
+  // Cascade team options based on selected club, age group, and division
+  const teamNames = useMemo(() => {
+    const normalizeAge = (s: string | null | undefined) =>
+      (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
+    const normalize = (s: string | null | undefined) => (s || '').toString().trim().toLowerCase();
+
+    const targetClub = normalize(filters.club);
+    const targetAge = normalizeAge(filters.ageGroup);
+    const targetDivision = normalize(filters.division);
+
+    const filtered = teams.filter((t) => {
+      if (targetClub && normalize(t.club) !== targetClub) return false;
+      if (targetAge && normalizeAge(t.ageGroup) !== targetAge) return false;
+      if (targetDivision && normalize(t.division) !== targetDivision) return false;
+      return true;
+    });
+
+    const seen = new Set<string>();
+    const unique: typeof teams = [];
+    for (const t of filtered) {
+      const key = normalize(t.name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      unique.push(t);
+    }
+    return unique;
+  }, [teams, filters.club, filters.ageGroup, filters.division]);
+
+  useEffect(() => {
+    if (!filters.teamName) return;
+    const stillValid = teamNames.some((t) => t.name === filters.teamName);
+    if (!stillValid) {
+      console.log('[check-in] clearing team filter because it no longer matches filters');
+      setFilters({ ...filters, teamName: null });
+    }
+  }, [teamNames, filters, setFilters]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -97,14 +131,14 @@ export default function CheckInScreen() {
           />
         </View>
 
-        {teamNames.length > 0 && (
+        {teams.length > 0 && (
           <View style={styles.filterRow}>
             <FilterDropdown
-              label="Team"
+              label={`Team${teamNames.length > 0 ? ` (${teamNames.length})` : ''}`}
               value={filters.teamName || null}
               options={teamNames}
               onSelect={(value) => setFilters({ ...filters, teamName: value })}
-              placeholder="All Teams"
+              placeholder={teamNames.length === 0 ? 'No teams match' : 'All Teams'}
             />
           </View>
         )}
