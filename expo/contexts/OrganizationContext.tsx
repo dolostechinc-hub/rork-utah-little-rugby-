@@ -315,41 +315,72 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     let savedToSupabase = false;
     let supabaseErrorMsg: string | null = null;
     try {
-      const { data: supabaseOrg, error } = await supabase
-        .from('organizations')
-        .insert({
-          id: orgId,
-          name,
-          code: orgCode,
-          logo_uri: null,
-          primary_color: primaryColor || '#0B7A4B',
-          owner_id: ownerUUID,
-          expires_at: expiresAt.toISOString(),
-        })
-        .select()
-        .single();
-      
-      if (error) {
-        supabaseErrorMsg = `${error.code ?? ''} ${error.message ?? ''}`.trim();
-        console.error('Failed to save org to Supabase:', error.message, error.code, error.details);
-      } else {
-        console.log('Organization saved to Supabase successfully:', supabaseOrg.id);
-        savedToSupabase = true;
-        
-        const { error: memberError } = await supabase
-          .from('org_members')
+      // Prefer the SECURITY DEFINER RPC (bypasses RLS entirely).
+      const rpc = await supabase.rpc('public_upsert_organization', {
+        p_id: orgId,
+        p_name: name,
+        p_code: orgCode,
+        p_logo_uri: null,
+        p_primary_color: primaryColor || '#0B7A4B',
+        p_owner_id: ownerUUID,
+        p_expires_at: expiresAt.toISOString(),
+        p_created_at: new Date().toISOString(),
+      });
+
+      if (rpc.error) {
+        console.warn('[createOrg] RPC upsert failed, falling back to direct insert:', rpc.error.code, rpc.error.message);
+        const { data: supabaseOrg, error } = await supabase
+          .from('organizations')
           .insert({
-            org_id: orgId,
-            user_id: ownerUUID,
-            role: 'owner',
-            email: '',
-            name: 'Owner',
-          });
-        
-        if (memberError) {
-          console.warn('Failed to save owner member to Supabase:', memberError.message);
+            id: orgId,
+            name,
+            code: orgCode,
+            logo_uri: null,
+            primary_color: primaryColor || '#0B7A4B',
+            owner_id: ownerUUID,
+            expires_at: expiresAt.toISOString(),
+          })
+          .select()
+          .single();
+
+        if (error) {
+          supabaseErrorMsg = `${error.code ?? ''} ${error.message ?? ''}`.trim();
+          console.error('Failed to save org to Supabase:', error.message, error.code, error.details);
         } else {
-          console.log('Owner member saved to Supabase');
+          console.log('Organization saved to Supabase (direct insert):', supabaseOrg.id);
+          savedToSupabase = true;
+        }
+      } else {
+        console.log('Organization saved to Supabase via RPC:', orgId);
+        savedToSupabase = true;
+      }
+
+      if (savedToSupabase) {
+        const memberRpc = await supabase.rpc('public_upsert_org_member', {
+          p_id: generateUUID(),
+          p_org_id: orgId,
+          p_user_id: ownerUUID,
+          p_role: 'owner',
+          p_email: '',
+          p_name: 'Owner',
+          p_joined_at: new Date().toISOString(),
+        });
+        if (memberRpc.error) {
+          console.warn('[createOrg] member RPC failed, trying direct insert:', memberRpc.error.message);
+          const { error: memberError } = await supabase
+            .from('org_members')
+            .insert({
+              org_id: orgId,
+              user_id: ownerUUID,
+              role: 'owner',
+              email: '',
+              name: 'Owner',
+            });
+          if (memberError) {
+            console.warn('Failed to save owner member to Supabase:', memberError.message);
+          }
+        } else {
+          console.log('Owner member saved to Supabase via RPC');
         }
       }
     } catch (err) {
@@ -365,7 +396,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       const { Alert } = require('react-native') as typeof import('react-native');
       Alert.alert(
         'Organization not synced to cloud',
-        `The organization was created on this device, but could NOT be saved to the cloud. Other people will not be able to join with the invite code until this is fixed.\n\nUsually this means the Supabase RLS migration "012_allow_anon_org_join.sql" has not been applied. Ask the developer to run it in the Supabase SQL editor.${detail}`
+        `The organization was created on this device, but could NOT be saved to the cloud. Other people will not be able to join with the invite code until this is fixed.\n\nAsk the developer to run migration "013_join_org_rpc.sql" in the Supabase SQL editor.${detail}`
       );
     }
     const org: Organization = {
@@ -407,64 +438,73 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     }
     console.log('[pushOrgToCloud] pushing org', org.code, org.id);
     try {
-      const { error: orgErr } = await supabase
-        .from('organizations')
-        .upsert({
-          id: org.id,
-          name: org.name,
-          code: org.code,
-          logo_uri: org.logoUri ?? null,
-          primary_color: org.primaryColor ?? '#0B7A4B',
-          owner_id: org.ownerId,
-          expires_at: org.expiresAt ?? null,
-          created_at: org.createdAt,
-        }, { onConflict: 'id' });
+      // Prefer RPC (bypasses RLS via SECURITY DEFINER).
+      const rpc = await supabase.rpc('public_upsert_organization', {
+        p_id: org.id,
+        p_name: org.name,
+        p_code: org.code,
+        p_logo_uri: org.logoUri ?? null,
+        p_primary_color: org.primaryColor ?? '#0B7A4B',
+        p_owner_id: org.ownerId,
+        p_expires_at: org.expiresAt ?? null,
+        p_created_at: org.createdAt,
+      });
 
-      if (orgErr) {
-        console.warn('[pushOrgToCloud] org upsert failed:', orgErr.code, orgErr.message);
-        return {
-          success: false,
-          message: `Could not sync to cloud.\n\nSupabase: ${orgErr.code ?? ''} ${orgErr.message ?? ''}\n\nIf this says RLS / policy, run the SQL migration "012_allow_anon_org_join.sql" in the Supabase SQL editor.`,
-        };
+      if (rpc.error) {
+        console.warn('[pushOrgToCloud] RPC upsert failed, trying direct upsert:', rpc.error.code, rpc.error.message);
+        const { error: orgErr } = await supabase
+          .from('organizations')
+          .upsert({
+            id: org.id,
+            name: org.name,
+            code: org.code,
+            logo_uri: org.logoUri ?? null,
+            primary_color: org.primaryColor ?? '#0B7A4B',
+            owner_id: org.ownerId,
+            expires_at: org.expiresAt ?? null,
+            created_at: org.createdAt,
+          }, { onConflict: 'id' });
+
+        if (orgErr) {
+          console.warn('[pushOrgToCloud] org upsert failed:', orgErr.code, orgErr.message);
+          return {
+            success: false,
+            message: `Could not sync to cloud.\n\nSupabase: ${orgErr.code ?? ''} ${orgErr.message ?? ''}\n\nRun the SQL migration "013_join_org_rpc.sql" in the Supabase SQL editor.`,
+          };
+        }
       }
 
-      // Verify it is actually readable by the anon role (what other devices use)
-      const { data: verify, error: verifyErr } = await supabase
-        .from('organizations')
-        .select('id,code,name')
-        .eq('id', org.id)
-        .maybeSingle();
+      // Verify via the same RPC testers will use.
+      const { data: verify, error: verifyErr } = await supabase.rpc('public_lookup_org_by_code', {
+        p_code: org.code,
+      });
 
       if (verifyErr) {
-        return { success: false, message: `Uploaded, but readback failed: ${verifyErr.message}` };
+        return { success: false, message: `Uploaded, but readback failed: ${verifyErr.message}. Run migration "013_join_org_rpc.sql".` };
       }
-      if (!verify) {
-        return { success: false, message: 'Uploaded, but the row is not visible to the anon role. The Supabase RLS migration "012_allow_anon_org_join.sql" still needs to be applied.' };
+      const verifiedRow = Array.isArray(verify) ? verify[0] : verify;
+      if (!verifiedRow) {
+        return { success: false, message: 'Uploaded, but the org is not visible via the join-by-code RPC. Run migration "013_join_org_rpc.sql" in the Supabase SQL editor.' };
       }
 
       // Also upsert members for this org so admins/owners are recognized in the cloud
       const orgMembers = orgData.members.filter(m => m.orgId === org.id);
-      if (orgMembers.length > 0) {
-        const { error: memErr } = await supabase
-          .from('org_members')
-          .upsert(
-            orgMembers.map(m => ({
-              id: m.id,
-              org_id: m.orgId,
-              user_id: m.userId,
-              role: m.role,
-              email: m.email ?? '',
-              name: m.name ?? '',
-              joined_at: m.joinedAt,
-            })),
-            { onConflict: 'id' }
-          );
-        if (memErr) {
-          console.warn('[pushOrgToCloud] member upsert failed:', memErr.message);
+      for (const m of orgMembers) {
+        const memRpc = await supabase.rpc('public_upsert_org_member', {
+          p_id: m.id,
+          p_org_id: m.orgId,
+          p_user_id: m.userId,
+          p_role: m.role,
+          p_email: m.email ?? '',
+          p_name: m.name ?? '',
+          p_joined_at: m.joinedAt,
+        });
+        if (memRpc.error) {
+          console.warn('[pushOrgToCloud] member RPC failed for', m.id, memRpc.error.message);
         }
       }
 
-      return { success: true, message: `"${verify.name}" is now synced to the cloud. Invite code ${verify.code} will work on any device.` };
+      return { success: true, message: `"${verifiedRow.name}" is now synced to the cloud. Invite code ${verifiedRow.code} will work on any device.` };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, message: `Network error: ${msg}` };
@@ -493,17 +533,36 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     if (!org) {
       console.log('Organization not found locally, checking Supabase...');
       try {
-        // 1) exact match
-        const exact = await supabase
-          .from('organizations')
-          .select('*')
-          .eq('code', normalizedCode)
-          .maybeSingle();
+        type RemoteOrg = {
+          id: string; name: string; code: string;
+          logo_uri: string | null; primary_color: string | null;
+          owner_id: string; created_at: string; expires_at: string | null;
+        };
+        let supabaseOrg: RemoteOrg | null = null;
 
-        let supabaseOrg = exact.data;
-        if (exact.error) {
-          lastSupabaseError = `${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim();
-          console.log('Supabase exact lookup error:', exact.error.code, exact.error.message);
+        // 0) Preferred: SECURITY DEFINER RPC (bypasses RLS entirely)
+        const rpc = await supabase.rpc('public_lookup_org_by_code', { p_code: normalizedCode });
+        if (rpc.error) {
+          lastSupabaseError = `${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim();
+          console.log('Supabase RPC lookup error:', rpc.error.code, rpc.error.message);
+        } else if (rpc.data && Array.isArray(rpc.data) && rpc.data.length > 0) {
+          supabaseOrg = rpc.data[0] as RemoteOrg;
+          console.log('[joinOrg] found via RPC:', supabaseOrg.name);
+        }
+
+        // 1) exact match fallback
+        if (!supabaseOrg) {
+          const exact = await supabase
+            .from('organizations')
+            .select('*')
+            .eq('code', normalizedCode)
+            .maybeSingle();
+          if (exact.error) {
+            lastSupabaseError = `${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim();
+            console.log('Supabase exact lookup error:', exact.error.code, exact.error.message);
+          } else {
+            supabaseOrg = (exact.data as RemoteOrg | null) ?? null;
+          }
         }
 
         // 2) case-insensitive fallback
@@ -517,7 +576,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             lastSupabaseError = `${ci.error.code ?? ''} ${ci.error.message ?? ''}`.trim();
             console.log('Supabase ilike lookup error:', ci.error.code, ci.error.message);
           } else {
-            supabaseOrg = ci.data;
+            supabaseOrg = (ci.data as RemoteOrg | null) ?? null;
           }
         }
 
@@ -531,8 +590,8 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             lastSupabaseError = `${broad.error.code ?? ''} ${broad.error.message ?? ''}`.trim();
             console.log('Supabase broad scan error:', broad.error.code, broad.error.message);
           } else if (broad.data) {
-            const hit = broad.data.find(r => String(r.code).toUpperCase() === normalizedCode);
-            if (hit) supabaseOrg = hit as unknown as typeof supabaseOrg;
+            const hit = (broad.data as RemoteOrg[]).find(r => String(r.code).toUpperCase() === normalizedCode);
+            if (hit) supabaseOrg = hit;
           }
         }
 
@@ -565,7 +624,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       const detail = lastSupabaseError ? `\n\nSupabase: ${lastSupabaseError}` : '';
       Alert.alert(
         'Organization not found',
-        `No organization was found with the code "${normalizedCode}".\n\nAsk the admin to open the app, go to Settings → My Organizations, and tap "Sync to Cloud" next to this org. Then try again.${detail}`
+        `No organization was found with the code "${normalizedCode}".\n\nAsk the admin to:\n1. Run migration "013_join_org_rpc.sql" in Supabase SQL editor (one-time).\n2. Open the app → Settings → My Organizations → "Sync All to Cloud".\n\nThen try again.${detail}`
       );
       return null;
     }
@@ -596,22 +655,38 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       joinedAt: new Date().toISOString(),
     };
     
-    // Try to save member to Supabase
+    // Try to save member to Supabase - prefer RPC, fall back to direct insert.
+    // Note: `userId` from the client (e.g. "user-1712345") is not a UUID, so we
+    // generate a stable UUID for the cloud row instead of failing on the UUID cast.
     try {
-      const { error } = await supabase
-        .from('org_members')
-        .insert({
-          org_id: org.id,
-          user_id: userId,
-          role: 'volunteer',
-          email,
-          name: userName,
-        });
-      
-      if (error) {
-        console.warn('Failed to save member to Supabase:', error.message);
+      const memberUUID = generateUUID();
+      const memberRpc = await supabase.rpc('public_upsert_org_member', {
+        p_id: member.id,
+        p_org_id: org.id,
+        p_user_id: memberUUID,
+        p_role: 'volunteer',
+        p_email: email,
+        p_name: userName,
+        p_joined_at: member.joinedAt,
+      });
+      if (memberRpc.error) {
+        console.warn('[joinOrg] member RPC failed, trying direct insert:', memberRpc.error.message);
+        const { error } = await supabase
+          .from('org_members')
+          .insert({
+            org_id: org.id,
+            user_id: memberUUID,
+            role: 'volunteer',
+            email,
+            name: userName,
+          });
+        if (error) {
+          console.warn('Failed to save member to Supabase:', error.message);
+        } else {
+          console.log('Member saved to Supabase (direct insert)');
+        }
       } else {
-        console.log('Member saved to Supabase');
+        console.log('Member saved to Supabase via RPC');
       }
     } catch (err) {
       console.warn('Supabase not available for member save:', err);
