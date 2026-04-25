@@ -46,6 +46,31 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     return () => unsub();
   }, [role]);
 
+  // While in editor mode, periodically re-validate the session against the
+  // server so that admin actions like "Disable Editor Access" or rotating
+  // the editor PIN take effect on other devices without requiring a manual
+  // app reload.
+  useEffect(() => {
+    if (role !== 'editor') return;
+    let cancelled = false;
+    const tick = async () => {
+      const session = await loadEditorSession();
+      if (cancelled) return;
+      if (!session) {
+        console.log('[auth] editor session expired/revoked - dropping to viewer');
+        setRole('viewer');
+        await AsyncStorage.removeItem(AUTH_STATE_KEY);
+      }
+    };
+    const interval = setInterval(() => {
+      void tick();
+    }, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [role]);
+
   useEffect(() => {
     const loadAuthState = async () => {
       try {
@@ -128,11 +153,9 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       pin: string,
       orgId?: string,
     ): Promise<{ success: boolean; role?: UserRole; error?: string }> => {
-      if (pin === adminPin) {
-        setRole('admin');
-        await saveAuthState('admin', pinVersion);
-        return { success: true, role: 'admin' };
-      }
+      // Always try editor PIN first when an org is selected, so editors
+      // are never accidentally promoted to admin (e.g. PIN collisions or
+      // someone sharing the admin PIN as an editor PIN).
       if (orgId) {
         try {
           await redeemEditorPinRPC(orgId, pin);
@@ -140,8 +163,13 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
           await saveAuthState('editor', pinVersion);
           return { success: true, role: 'editor' };
         } catch (err) {
-          return { success: false, error: (err as Error).message };
+          console.log('Editor PIN check failed, trying admin PIN:', (err as Error).message);
         }
+      }
+      if (pin === adminPin) {
+        setRole('admin');
+        await saveAuthState('admin', pinVersion);
+        return { success: true, role: 'admin' };
       }
       return { success: false, error: 'Invalid PIN' };
     },
@@ -191,6 +219,18 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     [],
   );
 
+  const revalidateEditorSession = useCallback(async (): Promise<boolean> => {
+    if (role !== 'editor') return true;
+    const session = await loadEditorSession();
+    if (!session) {
+      console.log('[auth] editor session was revoked, dropping to viewer');
+      setRole('viewer');
+      await AsyncStorage.removeItem(AUTH_STATE_KEY);
+      return false;
+    }
+    return true;
+  }, [role]);
+
   const revokeAllEditorAccess = useCallback(async (orgId: string, adminUserId?: string): Promise<void> => {
     await revokeAllEditorAccessRPC(orgId, adminUserId);
     if (role === 'editor') {
@@ -220,5 +260,6 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     issueEditorPin,
     revokeEditorPin,
     revokeAllEditorAccess,
+    revalidateEditorSession,
   };
 });

@@ -21,6 +21,11 @@ import {
   deleteRosterPlayer,
   type RosterChange,
 } from '@/lib/rosterSync';
+import {
+  fetchOrgEventMode,
+  setOrgEventMode,
+  subscribeOrgEventMode,
+} from '@/lib/eventModeSync';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -160,7 +165,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   // eslint-disable-next-line rork/general-context-optimization
   const trpcUtils = trpc.useUtils();
   // eslint-disable-next-line rork/general-context-optimization
-  const { canEdit, isAdmin } = useAuth();
+  const { canEdit, isAdmin, revalidateEditorSession } = useAuth();
   // eslint-disable-next-line rork/general-context-optimization
   const { currentOrg } = useOrganization();
   const orgIdForRegistry = currentOrg?.id ?? 'utah-little-rugby';
@@ -493,6 +498,56 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       pendingChangesRef.current = new Map();
     };
   }, [currentOrg?.id, queryClient, applyRosterChangeLocally]);
+
+  // ---------------------------------------------------------------------------
+  // Cross-device event_mode sync.
+  // The admin's lock / unlock flips a column on `organizations` in Supabase.
+  // Every other device subscribes to realtime updates on that row and applies
+  // the new mode immediately. When the event flips to view-only, editors are
+  // forced to re-validate their session (revoke happens server-side first), so
+  // their device drops to viewer right away.
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    const orgId = currentOrg?.id;
+    if (!orgId) return;
+    let cancelled = false;
+
+    const applyMode = async (mode: EventMode) => {
+      if (cancelled) return;
+      setEventModeState((prev) => {
+        if (prev !== mode) {
+          console.log('[eventMode] applying remote change ->', mode);
+        }
+        return mode;
+      });
+      try {
+        await AsyncStorage.setItem(EVENT_MODE_KEY, mode);
+      } catch (err) {
+        console.warn('[eventMode] persist failed:', err);
+      }
+      if (mode === 'viewOnly') {
+        try {
+          await revalidateEditorSession();
+        } catch (err) {
+          console.warn('[eventMode] revalidate failed:', err);
+        }
+      }
+    };
+
+    void (async () => {
+      const remote = await fetchOrgEventMode(orgId);
+      if (remote) await applyMode(remote);
+    })();
+
+    const unsubscribe = subscribeOrgEventMode(orgId, (mode) => {
+      void applyMode(mode);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [currentOrg?.id, revalidateEditorSession]);
 
   const pushPlayerToRemote = useCallback(
     (player: Player) => {
@@ -1309,9 +1364,22 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       throw new Error('Only the admin can lock or unlock the event.');
     }
     console.log('Setting event mode to:', mode);
+    // Optimistically update local UI, then push to Supabase so every other
+    // device receives it via realtime. Persist locally too so the admin's
+    // own device stays in sync if Supabase is briefly unreachable.
     setEventModeState(mode);
     await AsyncStorage.setItem(EVENT_MODE_KEY, mode);
-  }, [isAdmin]);
+    if (currentOrg?.id) {
+      try {
+        await setOrgEventMode(currentOrg.id, mode, currentOrg.ownerId);
+      } catch (err) {
+        console.warn('[eventMode] failed to push to Supabase:', err);
+        throw err;
+      }
+    } else {
+      console.warn('[eventMode] no current org - lock will not propagate to other devices');
+    }
+  }, [isAdmin, currentOrg?.id, currentOrg?.ownerId]);
 
   const setShowTeamAssignment = useCallback(async (value: boolean) => {
     if (!isAdmin) {
