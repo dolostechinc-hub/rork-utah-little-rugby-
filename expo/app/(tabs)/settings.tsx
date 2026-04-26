@@ -56,6 +56,7 @@ import {
   ArrowUp,
   Link,
   Clock,
+  Download,
 } from 'lucide-react-native';
 import { ParsedPlayer } from '@/components/CSVImportModal';
 import { useRouter } from 'expo-router';
@@ -106,7 +107,10 @@ export default function SettingsScreen() {
     setEventMode,
     showTeamAssignment,
     setShowTeamAssignment,
+    players,
   } = useRegistration();
+
+  const [isExporting, setIsExporting] = useState<boolean>(false);
 
   const [showConnectModal, setShowConnectModal] = useState(false);
   const [sheetUrl, setSheetUrl] = useState('');
@@ -476,6 +480,107 @@ export default function SettingsScreen() {
       ]
     );
   };
+
+  const handleExportCsv = useCallback(async () => {
+    if (isExporting) return;
+    if (!players || players.length === 0) {
+      Alert.alert('No Data', 'There are no players to export yet.');
+      return;
+    }
+    setIsExporting(true);
+    try {
+      console.log('[export-csv] starting export of', players.length, 'players');
+      const escape = (val: unknown): string => {
+        const s = val === null || val === undefined ? '' : String(val);
+        if (/[",\n\r]/.test(s)) {
+          return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      };
+      const headers = [
+        'First Name',
+        'Last Name',
+        'Date of Birth',
+        'Club',
+        'Age Group',
+        'Calculated Age Group',
+        'Division',
+        'Team Name',
+        'Weight',
+        'Restriction',
+        'Parent Name',
+        'Parent Phone',
+        'Age Verified',
+        'Checked In',
+        'Checked In At',
+        'Photo URL',
+        'Player ID',
+      ];
+      const rows = players.map((p) => [
+        p.firstName,
+        p.lastName,
+        p.dateOfBirth,
+        p.club,
+        p.ageGroup,
+        p.calculatedAgeGroup ?? '',
+        p.division,
+        p.teamName,
+        p.weight,
+        p.restrictionStatus ?? 'none',
+        p.parentName ?? '',
+        p.parentPhone ?? '',
+        p.isAgeVerified ? 'Yes' : 'No',
+        p.checkedIn ? 'Yes' : 'No',
+        p.checkedInAt ?? '',
+        p.photoUri ?? '',
+        p.id,
+      ]);
+      const csv = [headers, ...rows]
+        .map((r) => r.map(escape).join(','))
+        .join('\n');
+
+      const ts = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const fileName = `players_export_${ts.getFullYear()}-${pad(ts.getMonth() + 1)}-${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}.csv`;
+
+      if (Platform.OS === 'web') {
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        Alert.alert('Export Complete', `Downloaded ${players.length} players to ${fileName}.`);
+      } else {
+        const FileSystem = await import('expo-file-system/legacy');
+        const Sharing = await import('expo-sharing');
+        const fileUri = `${FileSystem.documentDirectory}${fileName}`;
+        await FileSystem.writeAsStringAsync(fileUri, csv, {
+          encoding: FileSystem.EncodingType.UTF8,
+        });
+        const canShare = await Sharing.isAvailableAsync();
+        if (canShare) {
+          await Sharing.shareAsync(fileUri, {
+            mimeType: 'text/csv',
+            dialogTitle: 'Export Players to CSV',
+            UTI: 'public.comma-separated-values-text',
+          });
+        } else {
+          Alert.alert('Saved', `File saved to ${fileUri}`);
+        }
+      }
+      console.log('[export-csv] export complete');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error('[export-csv] failed:', message);
+      Alert.alert('Export Failed', message);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [players, isExporting]);
 
   const handleDisconnect = () => {
     Alert.alert(
@@ -1268,6 +1373,33 @@ export default function SettingsScreen() {
       {isAdmin && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Data Management</Text>
+
+          {stats.total > 0 && (
+            <TouchableOpacity
+              style={styles.card}
+              onPress={handleExportCsv}
+              activeOpacity={0.7}
+              disabled={isExporting}
+              testID="export-csv-button"
+            >
+              <View style={[styles.iconBg, { backgroundColor: '#E8F5E9' }]}>
+                {isExporting ? (
+                  <ActivityIndicator size={24} color="#34A853" />
+                ) : (
+                  <Download size={24} color="#34A853" />
+                )}
+              </View>
+              <View style={styles.cardContent}>
+                <Text style={styles.cardTitle}>
+                  {isExporting ? 'Exporting...' : 'Export to CSV'}
+                </Text>
+                <Text style={styles.cardDescription}>
+                  Download all {stats.total} players (check-ins, weights, photos) as a CSV file you can paste into Google Sheets
+                </Text>
+              </View>
+              <ChevronRight size={20} color={Colors.textMuted} />
+            </TouchableOpacity>
+          )}
 
           {stats.total > 0 && (
             <TouchableOpacity
