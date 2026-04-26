@@ -159,13 +159,14 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     async (
       pin: string,
       orgId?: string,
+      volunteerName?: string,
     ): Promise<{ success: boolean; role?: UserRole; error?: string }> => {
       // Always try editor PIN first when an org is selected, so editors
       // are never accidentally promoted to admin (e.g. PIN collisions or
       // someone sharing the admin PIN as an editor PIN).
       if (orgId) {
         try {
-          await redeemEditorPinRPC(orgId, pin);
+          await redeemEditorPinRPC(orgId, pin, volunteerName);
           setRole('editor');
           await saveAuthState('editor', pinVersion);
           return { success: true, role: 'editor' };

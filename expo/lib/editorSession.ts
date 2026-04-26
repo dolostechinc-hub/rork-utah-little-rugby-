@@ -161,6 +161,48 @@ export async function revokeEditorPin(
   if (res?.error) throw new Error(res.error);
 }
 
+export interface ActiveEditorSession {
+  id: string;
+  device_label: string | null;
+  pin_label: string | null;
+  issued_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export async function listActiveEditorSessions(
+  orgId: string,
+  adminUserId?: string,
+): Promise<ActiveEditorSession[]> {
+  const { data, error } = await supabase.rpc('list_editor_sessions', {
+    p_org_id: orgId,
+    p_admin_user_id: adminUserId ?? null,
+  });
+  if (error) {
+    if (/function .* does not exist/i.test(error.message)) {
+      throw new Error(
+        'Active editors view requires a database update. Ask the admin to run migration 023_editor_sessions_admin.sql.',
+      );
+    }
+    throw new Error(error.message);
+  }
+  return (data ?? []) as ActiveEditorSession[];
+}
+
+export async function revokeEditorSession(
+  sessionId: string,
+  adminUserId?: string,
+): Promise<void> {
+  const { data, error } = await supabase.rpc('revoke_editor_session', {
+    p_session_id: sessionId,
+    p_admin_user_id: adminUserId ?? null,
+  });
+  if (error) throw new Error(error.message);
+  const res = data as { error?: string };
+  if (res?.error) throw new Error(res.error);
+}
+
 export async function listEditorPins(orgId: string) {
   const { data, error } = await supabase
     .from('editor_pins')

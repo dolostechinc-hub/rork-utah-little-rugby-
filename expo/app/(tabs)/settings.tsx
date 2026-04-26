@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -66,6 +66,11 @@ import { WEIGHT_LIMITS as _WEIGHT_LIMITS } from '@/utils/playerUtils';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRegistration } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
+import {
+  listActiveEditorSessions,
+  revokeEditorSession,
+  type ActiveEditorSession,
+} from '@/lib/editorSession';
 import { useOrganization } from '@/contexts/OrganizationContext';
 import * as Clipboard from 'expo-clipboard';
 import Colors from '@/constants/colors';
@@ -181,6 +186,10 @@ export default function SettingsScreen() {
   const [syncAllStatus, setSyncAllStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle');
   const [syncAllMessage, setSyncAllMessage] = useState<string | null>(null);
   const [pinInput, setPinInput] = useState('');
+  const [volunteerNameInput, setVolunteerNameInput] = useState('');
+  const [activeEditors, setActiveEditors] = useState<ActiveEditorSession[]>([]);
+  const [loadingActiveEditors, setLoadingActiveEditors] = useState<boolean>(false);
+  const [activeEditorsError, setActiveEditorsError] = useState<string | null>(null);
   const [currentPinInput, setCurrentPinInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
   const [editorPinInput, setEditorPinInput] = useState('');
@@ -630,12 +639,86 @@ export default function SettingsScreen() {
     Alert.alert('Roster Refreshed', lines.join('\n\n'));
   };
 
+  const formatRelativeShort = (d: Date): string => {
+    const diffMs = Date.now() - d.getTime();
+    const sec = Math.round(diffMs / 1000);
+    if (sec < 60) return 'just now';
+    const min = Math.round(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.round(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.round(hr / 24);
+    return `${day}d ago`;
+  };
+
+  const loadActiveEditors = useCallback(async () => {
+    if (!isAdmin || !currentOrg) {
+      setActiveEditors([]);
+      return;
+    }
+    setLoadingActiveEditors(true);
+    setActiveEditorsError(null);
+    try {
+      const rows = await listActiveEditorSessions(currentOrg.id, currentOrg.ownerId);
+      setActiveEditors(rows);
+    } catch (err) {
+      console.warn('listActiveEditorSessions failed', err);
+      setActiveEditorsError((err as Error).message || 'Could not load active editors.');
+      setActiveEditors([]);
+    } finally {
+      setLoadingActiveEditors(false);
+    }
+  }, [isAdmin, currentOrg]);
+
+  useEffect(() => {
+    void loadActiveEditors();
+    if (!isAdmin || !currentOrg) return;
+    const interval = setInterval(() => {
+      void loadActiveEditors();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [loadActiveEditors, isAdmin, currentOrg]);
+
+  const handleRevokeOneEditor = useCallback(
+    (session: ActiveEditorSession) => {
+      if (!currentOrg) return;
+      const who = session.device_label?.trim() || 'this editor';
+      Alert.alert(
+        'Revoke Editor Access',
+        `Drop ${who} back to view-only? They can rejoin later by entering the current Editor PIN again.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Revoke',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await revokeEditorSession(session.id, currentOrg.ownerId);
+                await loadActiveEditors();
+              } catch (err) {
+                console.error('revokeEditorSession failed', err);
+                Alert.alert('Error', (err as Error).message || 'Could not revoke editor.');
+              }
+            },
+          },
+        ],
+      );
+    },
+    [currentOrg, loadActiveEditors],
+  );
+
   const handleLogin = async () => {
     setPinError(null);
-    const result = await login(pinInput, currentOrg?.id);
+    const trimmedName = volunteerNameInput.trim();
+    if (currentOrg && trimmedName.length < 2) {
+      setPinError('Please enter your name so the admin knows who you are.');
+      return;
+    }
+    const result = await login(pinInput, currentOrg?.id, trimmedName || undefined);
     if (result.success) {
       setShowLoginModal(false);
       setPinInput('');
+      setVolunteerNameInput('');
       const roleLabel = result.role === 'admin' ? 'Admin' : 'Editor';
       Alert.alert('Success', `You now have ${roleLabel} access.`);
     } else {
@@ -1158,6 +1241,79 @@ export default function SettingsScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
+          </View>
+
+          <View style={styles.activeEditorsCard}>
+            <View style={styles.activeEditorsHeader}>
+              <View style={styles.activeEditorsTitleRow}>
+                <UserCog size={18} color={Colors.text} />
+                <Text style={styles.activeEditorsTitle}>Active Editors</Text>
+                <View style={styles.activeEditorsCountPill}>
+                  <Text style={styles.activeEditorsCountText}>{activeEditors.length}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => void loadActiveEditors()}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                testID="refresh-active-editors"
+              >
+                <RefreshCw size={16} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {loadingActiveEditors && activeEditors.length === 0 ? (
+              <View style={styles.activeEditorsEmpty}>
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={styles.activeEditorsEmptyText}>Loading…</Text>
+              </View>
+            ) : activeEditorsError ? (
+              <View style={styles.activeEditorsEmpty}>
+                <Text style={styles.activeEditorsErrorText}>{activeEditorsError}</Text>
+              </View>
+            ) : activeEditors.length === 0 ? (
+              <View style={styles.activeEditorsEmpty}>
+                <Text style={styles.activeEditorsEmptyText}>
+                  No volunteers have unlocked editor access yet. Share your Editor PIN — once they enter it (with their name) they will appear here.
+                </Text>
+              </View>
+            ) : (
+              <View>
+                {activeEditors.map((s) => {
+                  const name = s.device_label?.trim() || 'Unnamed editor';
+                  const last = s.last_used_at ? new Date(s.last_used_at) : null;
+                  const issued = new Date(s.issued_at);
+                  const lastLabel = last
+                    ? `Active ${formatRelativeShort(last)}`
+                    : `Joined ${formatRelativeShort(issued)}`;
+                  return (
+                    <View key={s.id} style={styles.activeEditorRow} testID={`active-editor-${s.id}`}>
+                      <View style={styles.activeEditorAvatar}>
+                        <Text style={styles.activeEditorAvatarText}>
+                          {name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={styles.activeEditorInfo}>
+                        <Text style={styles.activeEditorName} numberOfLines={1}>
+                          {name}
+                        </Text>
+                        <Text style={styles.activeEditorMeta} numberOfLines={1}>
+                          {lastLabel}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.activeEditorRevoke}
+                        onPress={() => handleRevokeOneEditor(s)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        testID={`revoke-editor-${s.id}`}
+                      >
+                        <UserX size={16} color={Colors.error} />
+                        <Text style={styles.activeEditorRevokeText}>Revoke</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
           </View>
 
           <View style={styles.infoCard}>
@@ -2096,6 +2252,7 @@ export default function SettingsScreen() {
         onRequestClose={() => {
           setShowLoginModal(false);
           setPinInput('');
+          setVolunteerNameInput('');
           setPinError(null);
         }}
       >
@@ -2110,12 +2267,31 @@ export default function SettingsScreen() {
                 onPress={() => {
                   setShowLoginModal(false);
                   setPinInput('');
+                  setVolunteerNameInput('');
                   setPinError(null);
                 }}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
                 <X size={24} color={Colors.textSecondary} />
               </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Your Name</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Sarah Johnson"
+                placeholderTextColor={Colors.textMuted}
+                value={volunteerNameInput}
+                onChangeText={setVolunteerNameInput}
+                autoCapitalize="words"
+                autoCorrect={false}
+                maxLength={40}
+                testID="volunteer-name-input"
+              />
+              <Text style={styles.inputHelper}>
+                The admin will see this name next to your editor session.
+              </Text>
             </View>
 
             <View style={styles.inputGroup}>
@@ -3929,6 +4105,115 @@ const styles = StyleSheet.create({
     color: Colors.primary,
   },
   editorActionTextDanger: {
+    color: Colors.error,
+  },
+  inputHelper: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 6,
+    lineHeight: 16,
+  },
+  activeEditorsCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  activeEditorsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  activeEditorsTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  activeEditorsTitle: {
+    fontSize: 15,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  activeEditorsCountPill: {
+    backgroundColor: Colors.primaryLight,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    minWidth: 22,
+    alignItems: 'center',
+  },
+  activeEditorsCountText: {
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: Colors.primary,
+  },
+  activeEditorsEmpty: {
+    paddingVertical: 14,
+    alignItems: 'center',
+    gap: 8,
+  },
+  activeEditorsEmptyText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  activeEditorsErrorText: {
+    fontSize: 13,
+    color: Colors.error,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  activeEditorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    gap: 12,
+  },
+  activeEditorAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  activeEditorAvatarText: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    color: Colors.primary,
+  },
+  activeEditorInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  activeEditorName: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.text,
+  },
+  activeEditorMeta: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  activeEditorRevoke: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.errorLight,
+  },
+  activeEditorRevokeText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
     color: Colors.error,
   },
   sheetsModalContainer: {
