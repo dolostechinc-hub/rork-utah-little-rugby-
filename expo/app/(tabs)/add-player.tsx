@@ -110,22 +110,38 @@ export default function AddPlayerScreen() {
 
   const handleWeightChange = (newWeight: string) => {
     setWeight(newWeight);
-    
-    if (newWeight.trim() && division) {
-      const restriction = checkWeightRestriction(
-        effectiveAgeGroup,
-        newWeight,
-        division
-      );
-      
-      if (restriction.isOverweight && restriction.limit) {
-        setPendingWeight(newWeight);
+  };
+
+  useEffect(() => {
+    if (!weight.trim() || !division || !effectiveAgeGroup) {
+      return;
+    }
+    if (showWeightModal) return;
+
+    const restriction = checkWeightRestriction(
+      effectiveAgeGroup,
+      weight,
+      division
+    );
+
+    if (restriction.isOverweight && restriction.limit) {
+      if (restrictionStatus === 'none') {
+        console.log('[add-player] weight over limit, prompting restriction modal', {
+          weight,
+          limit: restriction.limit,
+          ageGroup: effectiveAgeGroup,
+          division,
+        });
+        setPendingWeight(weight);
         setShowWeightModal(true);
-      } else {
+      }
+    } else {
+      if (restrictionStatus !== 'none') {
         setRestrictionStatus('none');
+        setPlayUpAgeGroup(null);
       }
     }
-  };
+  }, [weight, division, effectiveAgeGroup, showWeightModal, restrictionStatus]);
 
   const handleRestrictionSelect = (status: RestrictionStatus) => {
     setRestrictionStatus(status);
