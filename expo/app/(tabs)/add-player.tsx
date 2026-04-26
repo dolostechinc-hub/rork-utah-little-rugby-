@@ -364,12 +364,11 @@ export default function AddPlayerScreen() {
                   keyboardType="number-pad"
                   maxLength={10}
                 />
-                {calculatedAgeGroup && (
+                {calculatedAgeGroup ? (
                   <Text style={styles.ageGroupHint}>
-                    Age Group: {playUpAgeGroup || calculatedAgeGroup}
-                    {playUpAgeGroup ? ' (Playing Up)' : ''}
+                    {`Age Group: ${playUpAgeGroup || calculatedAgeGroup}${playUpAgeGroup ? ' (Playing Up)' : ''}`}
                   </Text>
-                )}
+                ) : null}
               </View>
               <View style={styles.spacer} />
               <View style={styles.inputGroup}>
@@ -385,7 +384,7 @@ export default function AddPlayerScreen() {
               </View>
             </View>
 
-            {restrictionStatus && restrictionStatus !== 'none' && (
+            {restrictionStatus !== 'none' ? (
               <View style={[styles.restrictionCard, { borderColor: getRestrictionStatusColor(restrictionStatus) }]}>
                 <AlertTriangle size={18} color={getRestrictionStatusColor(restrictionStatus)} />
                 <View style={styles.restrictionContent}>
@@ -397,7 +396,7 @@ export default function AddPlayerScreen() {
                   </Text>
                 </View>
               </View>
-            )}
+            ) : null}
           </View>
 
           <View style={styles.section}>
