@@ -27,7 +27,34 @@ import {
   checkWeightRestriction,
   getRestrictionStatusLabel,
   getRestrictionStatusColor,
+  getNextAgeGroup,
 } from '@/utils/playerUtils';
+
+function formatDateOfBirth(input: string, previous: string): string {
+  const isDeleting = input.length < previous.length;
+  const digits = input.replace(/\D/g, '').slice(0, 8);
+  if (digits.length === 0) return '';
+
+  let formatted = digits;
+  if (digits.length >= 5) {
+    formatted = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
+  } else if (digits.length >= 3) {
+    formatted = `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  } else {
+    formatted = digits;
+  }
+
+  if (isDeleting && (previous.endsWith('/') && formatted.length === previous.length - 1)) {
+    return formatted;
+  }
+
+  if (!isDeleting) {
+    if (digits.length === 2) formatted = `${digits}/`;
+    else if (digits.length === 4) formatted = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/`;
+  }
+
+  return formatted;
+}
 
 
 export default function AddPlayerScreen() {
@@ -47,6 +74,7 @@ export default function AddPlayerScreen() {
   const [restrictionStatus, setRestrictionStatus] = useState<RestrictionStatus>('none');
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [pendingWeight, setPendingWeight] = useState('');
+  const [playUpAgeGroup, setPlayUpAgeGroup] = useState<string | null>(null);
 
   const resetForm = () => {
     setFirstName('');
@@ -59,6 +87,12 @@ export default function AddPlayerScreen() {
     setIsAgeVerified(false);
     setPhotoUri(null);
     setRestrictionStatus('none');
+    setPlayUpAgeGroup(null);
+  };
+
+  const handleDateOfBirthChange = (text: string) => {
+    const formatted = formatDateOfBirth(text, dateOfBirth);
+    setDateOfBirth(formatted);
   };
 
   const calculatedAgeGroup = useMemo(() => {
@@ -96,6 +130,17 @@ export default function AddPlayerScreen() {
   const handleRestrictionSelect = (status: RestrictionStatus) => {
     setRestrictionStatus(status);
     setShowWeightModal(false);
+
+    if (status === 'play_up') {
+      const nextAgeGroup = getNextAgeGroup(effectiveAgeGroup);
+      if (nextAgeGroup) {
+        console.log(`Moving player from ${effectiveAgeGroup} to ${nextAgeGroup}`);
+        setPlayUpAgeGroup(nextAgeGroup);
+        setAgeGroup(nextAgeGroup);
+      }
+    } else {
+      setPlayUpAgeGroup(null);
+    }
   };
 
   const handleToggleVerified = () => {
@@ -215,7 +260,7 @@ export default function AddPlayerScreen() {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         club: club || '',
-        ageGroup: calculatedAgeGroup || ageGroup || '',
+        ageGroup: playUpAgeGroup || calculatedAgeGroup || ageGroup || '',
         division: division || '',
         teamName: '',
         dateOfBirth: dateOfBirth.trim(),
@@ -297,14 +342,16 @@ export default function AddPlayerScreen() {
                 <TextInput
                   style={styles.input}
                   value={dateOfBirth}
-                  onChangeText={setDateOfBirth}
+                  onChangeText={handleDateOfBirthChange}
                   placeholder="MM/DD/YYYY"
                   placeholderTextColor={Colors.textMuted}
-                  keyboardType="numbers-and-punctuation"
+                  keyboardType="number-pad"
+                  maxLength={10}
                 />
                 {calculatedAgeGroup && (
                   <Text style={styles.ageGroupHint}>
-                    Age Group: {calculatedAgeGroup}
+                    Age Group: {playUpAgeGroup || calculatedAgeGroup}
+                    {playUpAgeGroup ? ' (Playing Up)' : ''}
                   </Text>
                 )}
               </View>
