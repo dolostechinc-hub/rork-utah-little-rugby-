@@ -495,9 +495,31 @@ export default function SettingsScreen() {
     );
   };
 
-  const handleRefreshData = () => {
-    refreshData();
-    Alert.alert('Refreshing', 'Fetching latest data from Google Sheets...');
+  const handleRefreshData = async () => {
+    console.log('[settings] manual refresh from sheet');
+    const result = await refreshData();
+    if (!result.ok) {
+      Alert.alert(
+        'Refresh Failed',
+        result.error ??
+          'Could not pull the latest data. Please check your internet connection and that the sheet is shared with "Anyone with the link".',
+      );
+      return;
+    }
+    const newCount = result.imported ?? 0;
+    const keptCount = result.duplicatesKept ?? 0;
+    const lines: string[] = [];
+    if (newCount > 0) {
+      lines.push(`${newCount} new player${newCount === 1 ? '' : 's'} added.`);
+    } else {
+      lines.push('No new players found.');
+    }
+    if (keptCount > 0) {
+      lines.push(
+        `${keptCount} existing player${keptCount === 1 ? '' : 's'} kept with their photos, weights and check-in status.`,
+      );
+    }
+    Alert.alert('Roster Refreshed', lines.join('\n\n'));
   };
 
   const handleLogin = async () => {

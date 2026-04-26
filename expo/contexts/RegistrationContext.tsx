@@ -26,6 +26,7 @@ import {
   setOrgEventMode,
   subscribeOrgEventMode,
 } from '@/lib/eventModeSync';
+import { fetchSheetCsv, parseCSV } from '@/lib/googleSheetsCsv';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -1645,12 +1646,132 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     }
   }, [sheetsConfig?.isConnected, pendingWrites.length, processPendingWrites]);
 
-  const refreshData = useCallback(() => {
+  const refreshData = useCallback(async (): Promise<{
+    ok: boolean;
+    imported?: number;
+    duplicatesKept?: number;
+    error?: string;
+  }> => {
     console.log('Manual refresh triggered, isConnected:', isConnected);
     void queryClient.invalidateQueries({ queryKey: ['local-players'] });
-      // ^ matches all org-scoped variants because react-query treats keys as prefixes by default
     void queryClient.invalidateQueries({ queryKey: ['sheets-players-stub'] });
-  }, [queryClient]);
+
+    const sheetId =
+      savedSheetInfo?.spreadsheetId || sheetsConfig?.spreadsheetId || null;
+    if (!sheetId) {
+      console.log('[refreshData] no saved sheet to refresh from');
+      return { ok: false, error: 'No Google Sheet is connected.' };
+    }
+
+    try {
+      const csv = await fetchSheetCsv(sheetId);
+      const rows = parseCSV(csv);
+      if (rows.length < 2) {
+        return { ok: false, error: 'Sheet is empty or missing a header row.' };
+      }
+
+      const headerRow = rows[0];
+      const dataRows = rows.slice(1);
+
+      const FIELDS: { key: string; label: string }[] = [
+        { key: 'firstName', label: 'First Name' },
+        { key: 'lastName', label: 'Last Name' },
+        { key: 'club', label: 'Club' },
+        { key: 'ageGroup', label: 'Age Group' },
+        { key: 'division', label: 'Division' },
+        { key: 'teamName', label: 'Team Name' },
+        { key: 'dateOfBirth', label: 'Date of Birth' },
+        { key: 'parentName', label: 'Parent Name' },
+        { key: 'parentPhone', label: 'Phone' },
+        { key: 'weight', label: 'Weight' },
+      ];
+
+      const mapping: Record<string, number> = {};
+      const used = new Set<number>();
+      const norm = (s: string) => s.toLowerCase().replace(/[_\s-]/g, '');
+      FIELDS.forEach((f) => {
+        const idx = headerRow.findIndex((h, i) => {
+          if (used.has(i)) return false;
+          const n = norm(h);
+          return n === norm(f.key) || n === norm(f.label);
+        });
+        if (idx !== -1) {
+          mapping[f.key] = idx;
+          used.add(idx);
+        }
+      });
+      FIELDS.forEach((f) => {
+        if (mapping[f.key] !== undefined) return;
+        const idx = headerRow.findIndex((h, i) => {
+          if (used.has(i)) return false;
+          const n = norm(h);
+          return n.includes(norm(f.key)) || n.includes(norm(f.label));
+        });
+        if (idx !== -1) {
+          mapping[f.key] = idx;
+          used.add(idx);
+        }
+      });
+
+      if (
+        mapping.firstName === undefined ||
+        mapping.lastName === undefined
+      ) {
+        return {
+          ok: false,
+          error:
+            'Could not find First Name / Last Name columns. Re-import to remap columns.',
+        };
+      }
+
+      const get = (row: string[], key: string): string => {
+        const i = mapping[key];
+        if (i === undefined) return '';
+        return (row[i] ?? '').toString();
+      };
+
+      const playersToImport: Omit<Player, 'id'>[] = dataRows
+        .map((row) => {
+          const division = get(row, 'division').trim() || 'Restricted';
+          return {
+            firstName: get(row, 'firstName').trim(),
+            lastName: get(row, 'lastName').trim(),
+            club: get(row, 'club').trim(),
+            ageGroup: get(row, 'ageGroup').trim(),
+            division,
+            teamName: get(row, 'teamName').trim(),
+            dateOfBirth: get(row, 'dateOfBirth').trim(),
+            parentName: get(row, 'parentName').trim() || undefined,
+            parentPhone: get(row, 'parentPhone').trim() || undefined,
+            weight: get(row, 'weight').trim(),
+            isAgeVerified: false,
+            photoUri: null,
+            checkedIn: false,
+            checkedInAt: null,
+          } as Omit<Player, 'id'>;
+        })
+        .filter((p) => p.firstName && p.lastName);
+
+      const sourceOrgName = savedSheetInfo?.title || currentOrg?.name || '';
+      const result = await importPlayersWithOrgCheck(
+        playersToImport,
+        sourceOrgName,
+        currentOrg?.name ?? null,
+        true,
+      );
+      console.log('[refreshData] merge result:', result);
+      return {
+        ok: true,
+        imported: result.imported,
+        duplicatesKept: result.duplicatesKept,
+      };
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to refresh from Google Sheet.';
+      console.warn('[refreshData] failed:', message);
+      return { ok: false, error: message };
+    }
+  }, [queryClient, isConnected, savedSheetInfo, sheetsConfig, currentOrg?.name, importPlayersWithOrgCheck]);
 
   const isLoading = isLoadingConfig || 
     (isConnected ? sheetsPlayersQuery.isLoading : localPlayersQuery.isLoading);
