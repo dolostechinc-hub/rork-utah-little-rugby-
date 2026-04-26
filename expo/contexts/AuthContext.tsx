@@ -219,7 +219,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   const issueEditorPin = useCallback(
     async (
       orgId: string,
-      opts?: { expiresInMinutes?: number; label?: string; adminUserId?: string },
+      opts?: { expiresInMinutes?: number; label?: string; adminUserId?: string; customPin?: string },
     ): Promise<{ pin: string; pinId: string; expiresAt: string }> => {
       return await issueEditorPinRPC(orgId, opts);
     },

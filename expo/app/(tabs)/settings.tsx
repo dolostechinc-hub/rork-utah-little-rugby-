@@ -184,6 +184,8 @@ export default function SettingsScreen() {
   const [currentPinInput, setCurrentPinInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
   const [editorPinInput, setEditorPinInput] = useState('');
+  const [editorPinMode, setEditorPinMode] = useState<'auto' | 'custom'>('auto');
+  const [customEditorPinInput, setCustomEditorPinInput] = useState('');
   const [adminVerifyPin, setAdminVerifyPin] = useState('');
   const [pinError, setPinError] = useState<string | null>(null);
   const [showPin, setShowPin] = useState(false);
@@ -686,14 +688,26 @@ export default function SettingsScreen() {
       return;
     }
     try {
+      let customPin: string | undefined;
+      if (editorPinMode === 'custom') {
+        const cleaned = customEditorPinInput.trim();
+        if (!/^[0-9]{4,10}$/.test(cleaned)) {
+          setPinError('Custom PIN must be 4-10 digits.');
+          return;
+        }
+        customPin = cleaned;
+      }
       const { pin, expiresAt } = await issueEditorPin(currentOrg.id, {
         expiresInMinutes: 480,
         label: editorPinInput.trim() || undefined,
         adminUserId: currentOrg.ownerId,
+        customPin,
       });
       setShowEditorPinModal(false);
       setAdminVerifyPin('');
       setEditorPinInput('');
+      setCustomEditorPinInput('');
+      setEditorPinMode('auto');
       const expiresLabel = new Date(expiresAt).toLocaleString([], {
         weekday: 'short',
         hour: 'numeric',
@@ -1119,6 +1133,8 @@ export default function SettingsScreen() {
                 style={styles.editorActionButton}
                 onPress={() => {
                   setEditorPinInput('');
+                  setCustomEditorPinInput('');
+                  setEditorPinMode('auto');
                   setAdminVerifyPin('');
                   setPinError(null);
                   setShowEditorPinModal(true);
@@ -2245,6 +2261,8 @@ export default function SettingsScreen() {
           setShowEditorPinModal(false);
           setAdminVerifyPin('');
           setEditorPinInput('');
+          setCustomEditorPinInput('');
+          setEditorPinMode('auto');
           setPinError(null);
         }}
       >
@@ -2260,6 +2278,8 @@ export default function SettingsScreen() {
                   setShowEditorPinModal(false);
                   setAdminVerifyPin('');
                   setEditorPinInput('');
+                  setCustomEditorPinInput('');
+                  setEditorPinMode('auto');
                   setPinError(null);
                 }}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -2267,6 +2287,70 @@ export default function SettingsScreen() {
                 <X size={24} color={Colors.textSecondary} />
               </TouchableOpacity>
             </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>PIN Type</Text>
+              <View style={styles.pinModeRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.pinModeButton,
+                    editorPinMode === 'auto' && styles.pinModeButtonActive,
+                  ]}
+                  onPress={() => {
+                    setEditorPinMode('auto');
+                    setPinError(null);
+                  }}
+                  activeOpacity={0.7}
+                  testID="editor-pin-mode-auto"
+                >
+                  <Text
+                    style={[
+                      styles.pinModeButtonText,
+                      editorPinMode === 'auto' && styles.pinModeButtonTextActive,
+                    ]}
+                  >
+                    Auto-generate
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.pinModeButton,
+                    editorPinMode === 'custom' && styles.pinModeButtonActive,
+                  ]}
+                  onPress={() => {
+                    setEditorPinMode('custom');
+                    setPinError(null);
+                  }}
+                  activeOpacity={0.7}
+                  testID="editor-pin-mode-custom"
+                >
+                  <Text
+                    style={[
+                      styles.pinModeButtonText,
+                      editorPinMode === 'custom' && styles.pinModeButtonTextActive,
+                    ]}
+                  >
+                    Custom PIN
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {editorPinMode === 'custom' && (
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Custom PIN (4-10 digits)</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. 482931"
+                  placeholderTextColor={Colors.textMuted}
+                  value={customEditorPinInput}
+                  onChangeText={(t) => setCustomEditorPinInput(t.replace(/[^0-9]/g, ''))}
+                  keyboardType="number-pad"
+                  maxLength={10}
+                  testID="editor-pin-custom-input"
+                />
+              </View>
+            )}
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Label (optional)</Text>
@@ -2295,12 +2379,16 @@ export default function SettingsScreen() {
               testID="confirm-generate-editor-pin"
             >
               <Key size={20} color={Colors.white} />
-              <Text style={styles.connectButtonText}>Generate PIN</Text>
+              <Text style={styles.connectButtonText}>
+                {editorPinMode === 'custom' ? 'Create PIN' : 'Generate PIN'}
+              </Text>
             </TouchableOpacity>
 
             <View style={styles.modalInfo}>
               <Text style={styles.modalInfoText}>
-                The app generates a random 6-digit PIN and copies it to your clipboard. Share that PIN with your helper — they enter it under Settings → Unlock Access on their own device. The PIN is valid for 8 hours and any previously issued PIN is automatically revoked.
+                {editorPinMode === 'custom'
+                  ? 'Choose a 4-10 digit PIN you can remember. It is copied to your clipboard so you can share it with helpers — they enter it under Settings → Unlock Access on their device. Valid for 8 hours; any previously issued PIN is automatically revoked.'
+                  : 'The app generates a random 6-digit PIN and copies it to your clipboard. Share that PIN with your helper — they enter it under Settings → Unlock Access on their own device. The PIN is valid for 8 hours and any previously issued PIN is automatically revoked.'}
               </Text>
             </View>
           </View>
@@ -3527,6 +3615,33 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderWidth: 1,
     borderColor: Colors.border,
+  },
+  pinModeRow: {
+    flexDirection: 'row',
+    backgroundColor: Colors.surface,
+    borderRadius: 12,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 4,
+  },
+  pinModeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pinModeButtonActive: {
+    backgroundColor: Colors.primary,
+  },
+  pinModeButtonText: {
+    fontSize: 14,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+  },
+  pinModeButtonTextActive: {
+    color: Colors.white,
   },
   infoRow: {
     flexDirection: 'row',

@@ -108,15 +108,27 @@ export async function redeemEditorPin(
 
 export async function issueEditorPin(
   orgId: string,
-  opts?: { expiresInMinutes?: number; label?: string; adminUserId?: string },
+  opts?: { expiresInMinutes?: number; label?: string; adminUserId?: string; customPin?: string },
 ): Promise<{ pin: string; pinId: string; expiresAt: string }> {
-  const { data, error } = await supabase.rpc('issue_editor_pin', {
+  const customPin = opts?.customPin?.trim();
+  const payload: Record<string, unknown> = {
     p_org_id: orgId,
     p_expires_in_minutes: opts?.expiresInMinutes ?? 480,
     p_label: opts?.label ?? null,
     p_admin_user_id: opts?.adminUserId ?? null,
-  });
-  if (error) throw new Error(error.message);
+  };
+  if (customPin && customPin.length > 0) {
+    payload.p_custom_pin = customPin;
+  }
+  const { data, error } = await supabase.rpc('issue_editor_pin', payload);
+  if (error) {
+    if (customPin && /p_custom_pin|function .* does not exist/i.test(error.message)) {
+      throw new Error(
+        'Custom PINs require a database update. Ask the admin to run migration 022_custom_editor_pin.sql, or use an auto-generated PIN for now.',
+      );
+    }
+    throw new Error(error.message);
+  }
   const res = data as { error?: string; pin?: string; pin_id?: string; expires_at?: string };
   if (res?.error || !res?.pin) throw new Error(res?.error ?? 'Could not issue PIN');
   return { pin: res.pin, pinId: res.pin_id ?? '', expiresAt: res.expires_at ?? '' };
