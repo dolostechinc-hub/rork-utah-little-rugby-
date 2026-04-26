@@ -1,6 +1,6 @@
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   EditorSession,
   clearEditorSession,
@@ -34,6 +34,8 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   const [pinVersion, setPinVersion] = useState<number>(1);
   const [editorSession, setEditorSessionState] = useState<EditorSession | null>(null);
   const [eventLockedForEditors, setEventLockedForEditorsState] = useState<boolean>(false);
+  const [isOrgOwner, setIsOrgOwnerState] = useState<boolean>(false);
+  const isOrgOwnerRef = useRef<boolean>(false);
 
   useEffect(() => {
     const unsub = subscribeEditorSession((s) => {
@@ -124,6 +126,10 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   const loginAsAdmin = useCallback(
     async (pin: string): Promise<boolean> => {
+      if (!isOrgOwnerRef.current) {
+        console.log('[auth] admin login blocked - current device is not the owner of this organization');
+        return false;
+      }
       if (pin === adminPin) {
         setRole('admin');
         await saveAuthState('admin', pinVersion);
@@ -168,6 +174,13 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
         }
       }
       if (pin === adminPin) {
+        if (!isOrgOwnerRef.current) {
+          console.log('[auth] admin PIN matched but device is not org owner - refusing admin login');
+          return {
+            success: false,
+            error: 'Only the admin who created this organization can unlock admin access on this device. Use the Editor PIN instead.',
+          };
+        }
         setRole('admin');
         await saveAuthState('admin', pinVersion);
         return { success: true, role: 'admin' };
@@ -249,7 +262,23 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     });
   }, []);
 
-  const isAdmin = role === 'admin';
+  const setIsOrgOwner = useCallback((v: boolean) => {
+    isOrgOwnerRef.current = v;
+    setIsOrgOwnerState((prev) => (prev === v ? prev : v));
+  }, []);
+
+  // If we lose org-owner status (e.g. switched to a joined org), drop
+  // any persisted admin role on this device immediately so editors who
+  // join from another org can't carry admin power across orgs.
+  useEffect(() => {
+    if (!isOrgOwner && role === 'admin') {
+      console.log('[auth] dropping admin role - not org owner of current org');
+      setRole('viewer');
+      void AsyncStorage.removeItem(AUTH_STATE_KEY);
+    }
+  }, [isOrgOwner, role]);
+
+  const isAdmin = role === 'admin' && isOrgOwner;
   const isEditor = role === 'editor' && !!getEditorSession();
   const isViewer = !isAdmin && !isEditor;
   // Editors lose write access when the admin flips the event to view-only.
@@ -259,6 +288,8 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   return {
     role,
     isAdmin,
+    isOrgOwner,
+    setIsOrgOwner,
     isEditor,
     isViewer,
     canEdit,

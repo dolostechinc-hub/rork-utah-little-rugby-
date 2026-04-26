@@ -172,9 +172,29 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   // eslint-disable-next-line rork/general-context-optimization
   const trpcUtils = trpc.useUtils();
   // eslint-disable-next-line rork/general-context-optimization
-  const { canEdit, isAdmin, revalidateEditorSession, setEventLockedForEditors } = useAuth();
+  const { canEdit, isAdmin, revalidateEditorSession, setEventLockedForEditors, setIsOrgOwner } = useAuth();
   // eslint-disable-next-line rork/general-context-optimization
-  const { currentOrg } = useOrganization();
+  const { currentOrg, members } = useOrganization();
+
+  // Determine whether the current device is the owner of the currently
+  // selected organization. Only the device that originally created the
+  // org will have an `owner` member record whose userId matches the
+  // org's ownerId. Joiners only have a `volunteer` member record on
+  // their device, so they are never treated as admin.
+  useEffect(() => {
+    if (!currentOrg) {
+      setIsOrgOwner(false);
+      return;
+    }
+    const isOwner = members.some(
+      (m) =>
+        m.orgId === currentOrg.id &&
+        m.userId === currentOrg.ownerId &&
+        (m.role === 'owner' || m.role === 'admin'),
+    );
+    console.log('[auth] org-owner check for', currentOrg.code, '->', isOwner);
+    setIsOrgOwner(isOwner);
+  }, [currentOrg, members, setIsOrgOwner]);
   const orgIdForRegistry = currentOrg?.id ?? 'utah-little-rugby';
   const orgScope = currentOrg?.id ?? NO_ORG_SCOPE;
   const orgScopeRef = useRef<string>(orgScope);
