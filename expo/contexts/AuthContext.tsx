@@ -267,6 +267,16 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     setIsOrgOwnerState((prev) => (prev === v ? prev : v));
   }, []);
 
+  // Used right after the device creates a brand-new org. The creator
+  // is implicitly the admin/owner, so we promote the role without
+  // requiring them to type the admin PIN.
+  const grantAdminToOwner = useCallback(async () => {
+    isOrgOwnerRef.current = true;
+    setIsOrgOwnerState(true);
+    setRole('admin');
+    await saveAuthState('admin', pinVersion);
+  }, [pinVersion, saveAuthState]);
+
   // If we lose org-owner status (e.g. switched to a joined org), drop
   // any persisted admin role on this device immediately so editors who
   // join from another org can't carry admin power across orgs.
@@ -290,6 +300,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     isAdmin,
     isOrgOwner,
     setIsOrgOwner,
+    grantAdminToOwner,
     isEditor,
     isViewer,
     canEdit,

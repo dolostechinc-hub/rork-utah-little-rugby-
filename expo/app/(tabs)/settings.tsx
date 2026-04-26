@@ -145,6 +145,7 @@ export default function SettingsScreen() {
     issueEditorPin,
     revokeAllEditorAccess,
     editorSession,
+    grantAdminToOwner,
   } = useAuth();
   const editorPinEnabled = true;
 
@@ -687,19 +688,34 @@ export default function SettingsScreen() {
     try {
       const { pin, expiresAt } = await issueEditorPin(currentOrg.id, {
         expiresInMinutes: 480,
-        label: editorPinInput || undefined,
+        label: editorPinInput.trim() || undefined,
         adminUserId: currentOrg.ownerId,
       });
       setShowEditorPinModal(false);
       setAdminVerifyPin('');
       setEditorPinInput('');
-      const expiresLabel = new Date(expiresAt).toLocaleTimeString();
-      if (Platform.OS !== 'web') {
+      const expiresLabel = new Date(expiresAt).toLocaleString([], {
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+      try {
         await Clipboard.setStringAsync(pin);
+      } catch (clipErr) {
+        console.warn('clipboard set failed', clipErr);
       }
       Alert.alert(
         'Editor PIN Generated',
-        `PIN: ${pin}\n\nExpires at ${expiresLabel}.\n\nShare this PIN with staff who need editor access. The PIN has been copied to your clipboard.`,
+        `PIN: ${pin}\n\nThis PIN has been copied to your clipboard.\n\nShare it with your helpers. On their device they tap "Unlock Access" in Settings and enter this PIN to become an editor.\n\nExpires: ${expiresLabel}.\n\nGenerating a new PIN automatically revokes the previous one.`,
+        [
+          { text: 'OK' },
+          {
+            text: 'Copy Again',
+            onPress: () => {
+              void Clipboard.setStringAsync(pin);
+            },
+          },
+        ],
       );
     } catch (err) {
       console.error('issueEditorPin failed', err);
@@ -782,12 +798,18 @@ export default function SettingsScreen() {
     
     const userId = `owner-${Date.now()}`;
     const org = await createOrg(newOrgName.trim(), userId);
-    
+
+    try {
+      await grantAdminToOwner();
+    } catch (err) {
+      console.warn('[handleCreateOrg] grantAdminToOwner failed:', err);
+    }
+
     setShowCreateOrgModal(false);
     setNewOrgName('');
     Alert.alert(
       'Organization Created!',
-      `Your organization code is: ${org.code}\n\nShare this code with volunteers so they can join.`,
+      `Your organization code is: ${org.code}\n\nYou are now the admin of this organization. Share the code with volunteers so they can join, then generate an Editor PIN below to give them check-in access.`,
       [{ text: 'Copy Code', onPress: () => Clipboard.setStringAsync(org.code) }, { text: 'OK' }]
     );
   };
@@ -1083,15 +1105,11 @@ export default function SettingsScreen() {
           
           <View style={styles.editorManagementCard}>
             <View style={styles.editorStatusRow}>
-              <Users size={20} color={editorPinEnabled ? Colors.success : Colors.textMuted} />
+              <Users size={20} color={Colors.success} />
               <View style={styles.editorStatusContent}>
-                <Text style={styles.editorStatusTitle}>
-                  Editor Access: {editorPinEnabled ? 'Enabled' : 'Disabled'}
-                </Text>
+                <Text style={styles.editorStatusTitle}>Editor PINs</Text>
                 <Text style={styles.editorStatusSubtitle}>
-                  {editorPinEnabled 
-                    ? 'Others can log in with the editor PIN to check in players and add new players.'
-                    : 'Only you (admin) can make changes. Set an editor PIN to allow others to help.'}
+                  Generate a one-time PIN and share it with a helper. They tap "Unlock Access" in Settings on their device and enter the PIN to become an editor. Each new PIN automatically revokes the previous one.
                 </Text>
               </View>
             </View>
@@ -1106,25 +1124,23 @@ export default function SettingsScreen() {
                   setShowEditorPinModal(true);
                 }}
                 activeOpacity={0.7}
+                testID="generate-editor-pin-button"
               >
                 <Key size={18} color={Colors.primary} />
-                <Text style={styles.editorActionText}>
-                  {editorPinEnabled ? 'Change Editor PIN' : 'Set Editor PIN'}
-                </Text>
+                <Text style={styles.editorActionText}>Generate Editor PIN</Text>
               </TouchableOpacity>
 
-              {editorPinEnabled && (
-                <TouchableOpacity
-                  style={[styles.editorActionButton, styles.editorActionDanger]}
-                  onPress={handleDisableEditorAccess}
-                  activeOpacity={0.7}
-                >
-                  <ShieldOff size={18} color={Colors.error} />
-                  <Text style={[styles.editorActionText, styles.editorActionTextDanger]}>
-                    Disable Editor Access
-                  </Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={[styles.editorActionButton, styles.editorActionDanger]}
+                onPress={handleDisableEditorAccess}
+                activeOpacity={0.7}
+                testID="revoke-editor-access-button"
+              >
+                <ShieldOff size={18} color={Colors.error} />
+                <Text style={[styles.editorActionText, styles.editorActionTextDanger]}>
+                  Revoke All Editor Access
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -1134,10 +1150,11 @@ export default function SettingsScreen() {
               <View style={styles.infoContent}>
                 <Text style={styles.infoTitle}>How Editor Access Works</Text>
                 <Text style={styles.infoText}>
-                  • Set an Editor PIN to allow helpers to check in players{'\n'}
-                  • Editors can add players and check them in{'\n'}
-                  • Editors cannot change PINs or access settings{'\n'}
-                  • Change the Editor PIN anytime to revoke all editor sessions
+                  • Tap "Generate Editor PIN" — the app creates a 6-digit PIN.{'\n'}
+                  • Share that PIN with your helper. On their device they go to Settings → Unlock Access → enter the PIN.{'\n'}
+                  • Editors can check in players and add new players, but cannot change PINs or settings.{'\n'}
+                  • PINs expire after 8 hours by default.{'\n'}
+                  • Generate a new PIN to rotate, or tap "Revoke All Editor Access" to instantly drop everyone back to viewer-only.
                 </Text>
               </View>
             </View>
@@ -2072,7 +2089,7 @@ export default function SettingsScreen() {
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Enter Access PIN</Text>
+              <Text style={styles.modalTitle}>Unlock Editor Access</Text>
               <TouchableOpacity
                 onPress={() => {
                   setShowLoginModal(false);
@@ -2086,11 +2103,11 @@ export default function SettingsScreen() {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>PIN</Text>
+              <Text style={styles.inputLabel}>Editor PIN</Text>
               <View style={styles.pinInputContainer}>
                 <TextInput
                   style={styles.pinInput}
-                  placeholder="Enter PIN"
+                  placeholder="Paste the PIN your admin shared"
                   placeholderTextColor={Colors.textMuted}
                   value={pinInput}
                   onChangeText={setPinInput}
@@ -2129,7 +2146,7 @@ export default function SettingsScreen() {
 
             <View style={styles.modalInfo}>
               <Text style={styles.modalInfoText}>
-                Contact your administrator if you need access.
+                Ask your admin to open Settings → Editor Access Management → "Generate Editor PIN" and share the PIN it produces. (The admin's own admin PIN also works on the device that created this org.)
               </Text>
             </View>
           </View>
@@ -2237,9 +2254,7 @@ export default function SettingsScreen() {
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>
-                {editorPinEnabled ? 'Change Editor PIN' : 'Set Editor PIN'}
-              </Text>
+              <Text style={styles.modalTitle}>Generate Editor PIN</Text>
               <TouchableOpacity
                 onPress={() => {
                   setShowEditorPinModal(false);
@@ -2254,30 +2269,15 @@ export default function SettingsScreen() {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Verify Admin PIN</Text>
+              <Text style={styles.inputLabel}>Label (optional)</Text>
               <TextInput
                 style={styles.input}
-                placeholder="Enter your admin PIN"
-                placeholderTextColor={Colors.textMuted}
-                value={adminVerifyPin}
-                onChangeText={setAdminVerifyPin}
-                secureTextEntry
-                keyboardType="number-pad"
-                maxLength={8}
-              />
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>New Editor PIN</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="PIN for editors (min 4 digits)"
+                placeholder="e.g. Volunteer Lead, Front Desk"
                 placeholderTextColor={Colors.textMuted}
                 value={editorPinInput}
                 onChangeText={setEditorPinInput}
-                secureTextEntry
-                keyboardType="number-pad"
-                maxLength={8}
+                autoCapitalize="words"
+                maxLength={40}
               />
             </View>
 
@@ -2292,16 +2292,15 @@ export default function SettingsScreen() {
               style={styles.connectButton}
               onPress={handleSetEditorPin}
               activeOpacity={0.7}
+              testID="confirm-generate-editor-pin"
             >
-              <Users size={20} color={Colors.white} />
-              <Text style={styles.connectButtonText}>
-                {editorPinEnabled ? 'Update Editor PIN' : 'Enable Editor Access'}
-              </Text>
+              <Key size={20} color={Colors.white} />
+              <Text style={styles.connectButtonText}>Generate PIN</Text>
             </TouchableOpacity>
 
             <View style={styles.modalInfo}>
               <Text style={styles.modalInfoText}>
-                Share this PIN with people you trust to help with check-ins. They will be able to check in players and add new players, but cannot change settings.
+                The app generates a random 6-digit PIN and copies it to your clipboard. Share that PIN with your helper — they enter it under Settings → Unlock Access on their own device. The PIN is valid for 8 hours and any previously issued PIN is automatically revoked.
               </Text>
             </View>
           </View>
@@ -2324,7 +2323,7 @@ export default function SettingsScreen() {
         >
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Disable Editor Access</Text>
+              <Text style={styles.modalTitle}>Revoke All Editor Access</Text>
               <TouchableOpacity
                 onPress={() => {
                   setShowRevokeModal(false);
@@ -2335,20 +2334,6 @@ export default function SettingsScreen() {
               >
                 <X size={24} color={Colors.textSecondary} />
               </TouchableOpacity>
-            </View>
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Verify Admin PIN</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter your admin PIN"
-                placeholderTextColor={Colors.textMuted}
-                value={adminVerifyPin}
-                onChangeText={setAdminVerifyPin}
-                secureTextEntry
-                keyboardType="number-pad"
-                maxLength={8}
-              />
             </View>
 
             {pinError && (
@@ -2364,12 +2349,12 @@ export default function SettingsScreen() {
               activeOpacity={0.7}
             >
               <UserX size={20} color={Colors.white} />
-              <Text style={styles.connectButtonText}>Disable Editor Access</Text>
+              <Text style={styles.connectButtonText}>Revoke Now</Text>
             </TouchableOpacity>
 
             <View style={styles.modalInfo}>
               <Text style={styles.modalInfoText}>
-                This will immediately revoke all editor sessions. Editors will need to contact you to regain access.
+                This immediately invalidates every active editor PIN and session. Every editor device will drop back to viewer-only on its next sync (within ~30 seconds). Generate a fresh PIN to bring helpers back.
               </Text>
             </View>
           </View>
