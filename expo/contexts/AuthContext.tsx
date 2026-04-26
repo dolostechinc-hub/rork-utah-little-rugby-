@@ -33,6 +33,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   const [adminPin, setAdminPinState] = useState<string>(DEFAULT_ADMIN_PIN);
   const [pinVersion, setPinVersion] = useState<number>(1);
   const [editorSession, setEditorSessionState] = useState<EditorSession | null>(null);
+  const [eventLockedForEditors, setEventLockedForEditorsState] = useState<boolean>(false);
 
   useEffect(() => {
     const unsub = subscribeEditorSession((s) => {
@@ -239,10 +240,21 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     }
   }, [role]);
 
+  const setEventLockedForEditors = useCallback((locked: boolean) => {
+    setEventLockedForEditorsState((prev) => {
+      if (prev !== locked) {
+        console.log('[auth] eventLockedForEditors ->', locked);
+      }
+      return locked;
+    });
+  }, []);
+
   const isAdmin = role === 'admin';
   const isEditor = role === 'editor' && !!getEditorSession();
   const isViewer = !isAdmin && !isEditor;
-  const canEdit = isAdmin || isEditor;
+  // Editors lose write access when the admin flips the event to view-only.
+  // Admins always retain write access so they can flip it back.
+  const canEdit = isAdmin || (isEditor && !eventLockedForEditors);
 
   return {
     role,
@@ -261,5 +273,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     revokeEditorPin,
     revokeAllEditorAccess,
     revalidateEditorSession,
+    eventLockedForEditors,
+    setEventLockedForEditors,
   };
 });

@@ -29,15 +29,22 @@ import {
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
-const WRITE_QUEUE_KEY = 'pending_write_queue';
 const LOCAL_SYNC_INTERVAL = 30000; // How often to push local changes to sheets
 
-const PLAYERS_STORAGE_KEY = 'registration_players';
-const SHEETS_CONFIG_KEY = 'google_sheets_config';
-const SAVED_SHEET_URL_KEY = 'saved_google_sheet_url';
-const IMPORTED_SHEETS_KEY = 'imported_sheets_history';
-const EVENT_MODE_KEY = 'event_mode';
-const SHOW_TEAM_ASSIGNMENT_KEY = 'show_team_assignment';
+// Storage keys are scoped per-organization so that switching orgs gives a
+// clean slate (no cross-contamination of rosters, Google Sheet connections,
+// imported sheet history, etc.). The base names below are the prefixes; the
+// actual keys appended with `:${orgId}` are computed inside the provider via
+// the helper functions (playersKey(), sheetsConfigKey(), ...).
+const BASE_WRITE_QUEUE_KEY = 'pending_write_queue';
+const BASE_PLAYERS_STORAGE_KEY = 'registration_players';
+const BASE_SHEETS_CONFIG_KEY = 'google_sheets_config';
+const BASE_SAVED_SHEET_URL_KEY = 'saved_google_sheet_url';
+const BASE_IMPORTED_SHEETS_KEY = 'imported_sheets_history';
+const BASE_EVENT_MODE_KEY = 'event_mode';
+const BASE_SHOW_TEAM_ASSIGNMENT_KEY = 'show_team_assignment';
+const BASE_IMPORTED_METADATA_KEY = 'imported_metadata';
+const NO_ORG_SCOPE = '__none__';
 
 export type EventMode = 'registration' | 'viewOnly';
 
@@ -165,10 +172,24 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   // eslint-disable-next-line rork/general-context-optimization
   const trpcUtils = trpc.useUtils();
   // eslint-disable-next-line rork/general-context-optimization
-  const { canEdit, isAdmin, revalidateEditorSession } = useAuth();
+  const { canEdit, isAdmin, revalidateEditorSession, setEventLockedForEditors } = useAuth();
   // eslint-disable-next-line rork/general-context-optimization
   const { currentOrg } = useOrganization();
   const orgIdForRegistry = currentOrg?.id ?? 'utah-little-rugby';
+  const orgScope = currentOrg?.id ?? NO_ORG_SCOPE;
+  const orgScopeRef = useRef<string>(orgScope);
+  useEffect(() => {
+    orgScopeRef.current = orgScope;
+  }, [orgScope]);
+
+  const playersKey = useCallback(() => `${BASE_PLAYERS_STORAGE_KEY}:${orgScopeRef.current}`, []);
+  const sheetsConfigKey = useCallback(() => `${BASE_SHEETS_CONFIG_KEY}:${orgScopeRef.current}`, []);
+  const savedSheetUrlKey = useCallback(() => `${BASE_SAVED_SHEET_URL_KEY}:${orgScopeRef.current}`, []);
+  const importedSheetsKey = useCallback(() => `${BASE_IMPORTED_SHEETS_KEY}:${orgScopeRef.current}`, []);
+  const writeQueueKey = useCallback(() => `${BASE_WRITE_QUEUE_KEY}:${orgScopeRef.current}`, []);
+  const eventModeKey = useCallback(() => `${BASE_EVENT_MODE_KEY}:${orgScopeRef.current}`, []);
+  const showTeamAssignmentKey = useCallback(() => `${BASE_SHOW_TEAM_ASSIGNMENT_KEY}:${orgScopeRef.current}`, []);
+  const importedMetadataKey = useCallback(() => `${BASE_IMPORTED_METADATA_KEY}:${orgScopeRef.current}`, []);
   const [verifiedRegistry, setVerifiedRegistry] = useState<Set<string>>(new Set());
   const verifiedRegistryRef = (useState(() => ({ current: new Set<string>() }))[0]);
   const [filters, setFilters] = useState<RegistrationFilters>({
@@ -197,33 +218,48 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   type TeamOption = { id: string; name: string; club?: string; ageGroup?: string; division?: string };
 
   useEffect(() => {
+    let cancelled = false;
     const loadConfig = async () => {
+      // Reset all org-scoped state so switching orgs feels like a fresh
+      // install for the new org until its data loads from storage / cloud.
+      setSheetsConfig(null);
+      setSavedSheetInfo(null);
+      setImportedSheets([]);
+      setPendingWrites([]);
+      setImportedClubs([]);
+      setImportedTeams([]);
+      setImportedAgeGroups([]);
+      setImportedDivisions([]);
+      setEventModeState('registration');
+      setShowTeamAssignmentState(false);
+      memoryPlayerCache = null;
       try {
         const [storedConfig, storedMeta, storedSheetInfo, storedImportedSheets, storedQueue, storedEventMode, storedShowTeam] = await Promise.all([
-          AsyncStorage.getItem(SHEETS_CONFIG_KEY),
-          AsyncStorage.getItem('imported_metadata'),
-          AsyncStorage.getItem(SAVED_SHEET_URL_KEY),
-          AsyncStorage.getItem(IMPORTED_SHEETS_KEY),
-          AsyncStorage.getItem(WRITE_QUEUE_KEY),
-          AsyncStorage.getItem(EVENT_MODE_KEY),
-          AsyncStorage.getItem(SHOW_TEAM_ASSIGNMENT_KEY),
+          AsyncStorage.getItem(sheetsConfigKey()),
+          AsyncStorage.getItem(importedMetadataKey()),
+          AsyncStorage.getItem(savedSheetUrlKey()),
+          AsyncStorage.getItem(importedSheetsKey()),
+          AsyncStorage.getItem(writeQueueKey()),
+          AsyncStorage.getItem(eventModeKey()),
+          AsyncStorage.getItem(showTeamAssignmentKey()),
         ]);
+        if (cancelled) return;
 
         if (storedEventMode === 'viewOnly' || storedEventMode === 'registration') {
           setEventModeState(storedEventMode);
-          console.log('Loaded event mode:', storedEventMode);
+          console.log('Loaded event mode for org', orgScope, '->', storedEventMode);
         }
 
         if (storedShowTeam === 'true') {
           setShowTeamAssignmentState(true);
           console.log('Loaded showTeamAssignment: true');
         }
-        
+
         if (storedConfig) {
-          console.log('Loaded sheets config from storage');
+          console.log('Loaded sheets config for org', orgScope);
           setSheetsConfig(JSON.parse(storedConfig));
         }
-        
+
         if (storedMeta) {
           const meta = JSON.parse(storedMeta);
           setImportedClubs(meta.clubs || []);
@@ -231,14 +267,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
           setImportedAgeGroups(meta.ageGroups || []);
           setImportedDivisions(meta.divisions || []);
         }
-        
+
         if (storedSheetInfo) {
-          console.log('Loaded saved sheet info from storage');
+          console.log('Loaded saved sheet info for org', orgScope);
           setSavedSheetInfo(JSON.parse(storedSheetInfo));
         }
-        
+
         if (storedImportedSheets) {
-          console.log('Loaded imported sheets history from storage');
+          console.log('Loaded imported sheets history for org', orgScope);
           setImportedSheets(JSON.parse(storedImportedSheets));
         }
 
@@ -252,11 +288,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       } catch (error) {
         console.error('Failed to load sheets config:', error);
       } finally {
-        setIsLoadingConfig(false);
+        if (!cancelled) setIsLoadingConfig(false);
       }
     };
     void loadConfig();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [orgScope, sheetsConfigKey, importedMetadataKey, savedSheetUrlKey, importedSheetsKey, writeQueueKey, eventModeKey, showTeamAssignmentKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -316,10 +355,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   });
 
   const localPlayersQuery = useQuery({
-    queryKey: ['local-players'],
+    queryKey: ['local-players', orgScope],
     queryFn: async () => {
-      console.log('Fetching players from local storage...');
-      const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+      console.log('Fetching players from local storage for org', orgScope);
+      const stored = await AsyncStorage.getItem(playersKey());
       if (stored) {
         console.log('Found stored players');
         const parsed = JSON.parse(stored) as Player[];
@@ -376,7 +415,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     pendingChangesRef.current = new Map();
 
     try {
-      const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+      const stored = await AsyncStorage.getItem(playersKey());
       const current: Player[] = stored ? JSON.parse(stored) : [];
       const byId = new Map<string, Player>();
       current.forEach((p) => byId.set(p.id, p));
@@ -404,8 +443,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
       const next = Array.from(byId.values());
       memoryPlayerCache = next;
-      await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(next));
-      queryClient.setQueryData(['local-players'], next);
+      await AsyncStorage.setItem(playersKey(), JSON.stringify(next));
+      queryClient.setQueryData(['local-players', orgScopeRef.current], next);
       console.log('[rosterSync] applied batched remote changes:', changes.length);
     } catch (err) {
       console.warn('[rosterSync] failed to flush remote changes:', err);
@@ -437,7 +476,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
           console.log('[rosterSync] remote roster empty, keeping local');
           return;
         }
-        const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+        const stored = await AsyncStorage.getItem(playersKey());
         const local: Player[] = stored ? JSON.parse(stored) : [];
 
         const byId = new Map<string, Player>();
@@ -448,8 +487,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         const { deduped, duplicateIds } = dedupePlayers(combined);
 
         memoryPlayerCache = deduped;
-        await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(deduped));
-        queryClient.setQueryData(['local-players'], deduped);
+        await AsyncStorage.setItem(playersKey(), JSON.stringify(deduped));
+        queryClient.setQueryData(['local-players', orgScopeRef.current], deduped);
         console.log('[rosterSync] merged + deduped remote roster:', {
           remote: remote.length,
           local: local.length,
@@ -521,9 +560,18 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         return mode;
       });
       try {
-        await AsyncStorage.setItem(EVENT_MODE_KEY, mode);
+        await AsyncStorage.setItem(eventModeKey(), mode);
       } catch (err) {
         console.warn('[eventMode] persist failed:', err);
+      }
+      // Tell AuthContext whether editors should be locked out of writes.
+      // Admins are unaffected; this flips canEdit=false for editors so the
+      // entire app (including button states) reacts immediately on every
+      // device that's currently viewing this org.
+      try {
+        setEventLockedForEditors(mode === 'viewOnly');
+      } catch (err) {
+        console.warn('[eventMode] setEventLockedForEditors failed:', err);
       }
       if (mode === 'viewOnly') {
         try {
@@ -543,11 +591,23 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       void applyMode(mode);
     });
 
+    // Periodic poll as a safety net in case Supabase realtime isn't
+    // delivering updates to this device (e.g. WebSocket dropped). 15s is
+    // tight enough for the lock to feel mandatory at an event.
+    const pollId = setInterval(() => {
+      if (cancelled) return;
+      void (async () => {
+        const remote = await fetchOrgEventMode(orgId);
+        if (remote) await applyMode(remote);
+      })();
+    }, 15000);
+
     return () => {
       cancelled = true;
       unsubscribe();
+      clearInterval(pollId);
     };
-  }, [currentOrg?.id, revalidateEditorSession]);
+  }, [currentOrg?.id, revalidateEditorSession, setEventLockedForEditors]);
 
   const pushPlayerToRemote = useCallback(
     (player: Player) => {
@@ -583,13 +643,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     }
     console.log('Mirroring sheets data to local cache (fallback):', data.length);
     memoryPlayerCache = data;
-    AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(data)).catch((err) =>
+    AsyncStorage.setItem(playersKey(), JSON.stringify(data)).catch((err) =>
       console.error('Failed to mirror sheets data to local cache:', err),
     );
   }, [sheetsPlayersQuery.data, sheetsConfig?.isConnected, localPlayersQuery.data]);
 
   const savePendingQueue = useCallback(async (queue: PendingWrite[]) => {
-    await AsyncStorage.setItem(WRITE_QUEUE_KEY, JSON.stringify(queue));
+    await AsyncStorage.setItem(writeQueueKey(), JSON.stringify(queue));
   }, []);
 
   const addToWriteQueue = useCallback(async (player: Player, action: 'update' | 'add') => {
@@ -644,7 +704,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Updating player locally:', updatedPlayer.id);
       // Read directly from AsyncStorage to ensure we have the latest data
       // This prevents data loss when the React Query cache is stale
-      const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+      const stored = await AsyncStorage.getItem(playersKey());
       const currentPlayers: Player[] = stored ? JSON.parse(stored) : [];
       
       const playerExists = currentPlayers.some(p => p.id === updatedPlayer.id);
@@ -672,14 +732,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         }
       }
       
-      await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(newPlayers));
+      await AsyncStorage.setItem(playersKey(), JSON.stringify(newPlayers));
       console.log('Player data saved to storage, total players:', newPlayers.length);
       return newPlayers;
     },
     onSuccess: (newPlayers, variables) => {
       console.log('Update mutation success, refreshing query cache');
       memoryPlayerCache = newPlayers;
-      queryClient.setQueryData(['local-players'], newPlayers);
+      queryClient.setQueryData(['local-players', orgScopeRef.current], newPlayers);
       pushPlayerToRemote(variables);
     },
   });
@@ -688,20 +748,20 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     mutationFn: async (newPlayer: Omit<Player, 'id'>) => {
       console.log('Adding new player locally:', newPlayer.firstName, newPlayer.lastName);
       // Read directly from AsyncStorage to ensure we have the latest data
-      const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+      const stored = await AsyncStorage.getItem(playersKey());
       const currentPlayers: Player[] = stored ? JSON.parse(stored) : [];
       const player: Player = {
         ...newPlayer,
         id: Date.now().toString(),
       };
       const newPlayers = [...currentPlayers, player];
-      await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(newPlayers));
+      await AsyncStorage.setItem(playersKey(), JSON.stringify(newPlayers));
       console.log('Player added to storage, total players:', newPlayers.length);
       return { players: newPlayers, newPlayer: player };
     },
     onSuccess: ({ players, newPlayer }) => {
       memoryPlayerCache = players;
-      queryClient.setQueryData(['local-players'], players);
+      queryClient.setQueryData(['local-players', orgScopeRef.current], players);
       pushPlayerToRemote(newPlayer);
     },
   });
@@ -730,7 +790,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         divisions: newDivisions
       };
       
-      await AsyncStorage.setItem('imported_metadata', JSON.stringify(metaToSave));
+      await AsyncStorage.setItem(importedMetadataKey(), JSON.stringify(metaToSave));
       return metaToSave;
     },
     onSuccess: (data) => {
@@ -753,7 +813,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('Importing', playersToImport.length, 'players with deduplication...');
       
       // Get existing players from storage
-      const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+      const stored = await AsyncStorage.getItem(playersKey());
       let existingPlayers: Player[] = stored ? JSON.parse(stored) : [];
       
       // CHECK FOR DEMO DATA: If we have mock players (ids 1-8), clear them
@@ -842,13 +902,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log(`Deduplication complete: ${duplicatesKept} matched, ${newPlayersAdded} new, ${remainingExisting.length} preserved from previous`);
       console.log('Total players after import:', resultPlayers.length);
       
-      await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(resultPlayers));
+      await AsyncStorage.setItem(playersKey(), JSON.stringify(resultPlayers));
       return resultPlayers;
     },
     onSuccess: (allPlayers) => {
       console.log('Import success with deduplication, total players:', allPlayers.length);
       memoryPlayerCache = allPlayers;
-      queryClient.setQueryData(['local-players'], allPlayers);
+      queryClient.setQueryData(['local-players', orgScopeRef.current], allPlayers);
       pushPlayersToRemote(allPlayers);
     },
   });
@@ -856,11 +916,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const resetDataMutation = useMutation({
     mutationFn: async () => {
       console.log('Resetting to mock data...');
-      await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(mockPlayers));
+      await AsyncStorage.setItem(playersKey(), JSON.stringify(mockPlayers));
       return mockPlayers;
     },
     onSuccess: (mockData) => {
-      queryClient.setQueryData(['local-players'], mockData);
+      queryClient.setQueryData(['local-players', orgScopeRef.current], mockData);
     },
   });
 
@@ -868,16 +928,16 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     mutationFn: async () => {
       console.log('Clearing all imported data...');
       await Promise.all([
-        AsyncStorage.removeItem(PLAYERS_STORAGE_KEY),
-        AsyncStorage.removeItem(SHEETS_CONFIG_KEY),
-        AsyncStorage.removeItem('imported_metadata'),
-        AsyncStorage.removeItem(SAVED_SHEET_URL_KEY),
+        AsyncStorage.removeItem(playersKey()),
+        AsyncStorage.removeItem(sheetsConfigKey()),
+        AsyncStorage.removeItem(importedMetadataKey()),
+        AsyncStorage.removeItem(savedSheetUrlKey()),
       ]);
       return [];
     },
     onSuccess: () => {
       memoryPlayerCache = [];
-      queryClient.setQueryData(['local-players'], []);
+      queryClient.setQueryData(['local-players', orgScopeRef.current], []);
       setSheetsConfig(null);
       setSavedSheetInfo(null);
       setImportedClubs([]);
@@ -885,6 +945,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       setImportedAgeGroups([]);
       setImportedDivisions([]);
       void queryClient.invalidateQueries({ queryKey: ['local-players'] });
+      // ^ matches all org-scoped variants because react-query treats keys as prefixes by default
       console.log('All imported data cleared successfully');
     },
   });
@@ -896,7 +957,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       title,
       lastImportedAt: new Date().toISOString(),
     };
-    await AsyncStorage.setItem(SAVED_SHEET_URL_KEY, JSON.stringify(info));
+    await AsyncStorage.setItem(savedSheetUrlKey(), JSON.stringify(info));
     setSavedSheetInfo(info);
     console.log('Saved sheet info:', info);
   }, []);
@@ -923,7 +984,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       const updatedSheets = importedSheets.map(s => 
         s.id === existingSheet.id ? updatedSheet : s
       );
-      await AsyncStorage.setItem(IMPORTED_SHEETS_KEY, JSON.stringify(updatedSheets));
+      await AsyncStorage.setItem(importedSheetsKey(), JSON.stringify(updatedSheets));
       setImportedSheets(updatedSheets);
       console.log('Updated existing imported sheet:', updatedSheet.accessCode);
       return updatedSheet;
@@ -945,7 +1006,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     };
     
     const updatedSheets = [...importedSheets, newSheet];
-    await AsyncStorage.setItem(IMPORTED_SHEETS_KEY, JSON.stringify(updatedSheets));
+    await AsyncStorage.setItem(importedSheetsKey(), JSON.stringify(updatedSheets));
     setImportedSheets(updatedSheets);
     console.log('Added new imported sheet with code:', newSheet.accessCode);
     return newSheet;
@@ -956,14 +1017,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     const updatedSheets = importedSheets.map(s => 
       s.id === sheetId ? { ...s, ...updates } : s
     );
-    await AsyncStorage.setItem(IMPORTED_SHEETS_KEY, JSON.stringify(updatedSheets));
+    await AsyncStorage.setItem(importedSheetsKey(), JSON.stringify(updatedSheets));
     setImportedSheets(updatedSheets);
   }, [importedSheets]);
 
   const deleteImportedSheet = useCallback(async (sheetId: string) => {
     console.log('Deleting imported sheet:', sheetId);
     const updatedSheets = importedSheets.filter(s => s.id !== sheetId);
-    await AsyncStorage.setItem(IMPORTED_SHEETS_KEY, JSON.stringify(updatedSheets));
+    await AsyncStorage.setItem(importedSheetsKey(), JSON.stringify(updatedSheets));
     setImportedSheets(updatedSheets);
   }, [importedSheets]);
 
@@ -994,14 +1055,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       sheetName,
       isConnected: true,
     };
-    await AsyncStorage.setItem(SHEETS_CONFIG_KEY, JSON.stringify(config));
+    await AsyncStorage.setItem(sheetsConfigKey(), JSON.stringify(config));
     setSheetsConfig(config);
     console.log('Write-back enabled - changes will sync to Google Sheets');
   }, []);
 
   const disableWriteBack = useCallback(async () => {
     console.log('Disabling write-back (keeping saved sheet info)');
-    await AsyncStorage.removeItem(SHEETS_CONFIG_KEY);
+    await AsyncStorage.removeItem(sheetsConfigKey());
     setSheetsConfig(null);
   }, []);
 
@@ -1022,7 +1083,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         sheetName,
         isConnected: true,
       };
-      await AsyncStorage.setItem(SHEETS_CONFIG_KEY, JSON.stringify(config));
+      await AsyncStorage.setItem(sheetsConfigKey(), JSON.stringify(config));
       setSheetsConfig(config);
       console.log('Connected to Google Sheets successfully');
       return result;
@@ -1032,9 +1093,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
   const disconnectFromSheets = useCallback(async () => {
     console.log('Disconnecting from Google Sheets');
-    await AsyncStorage.removeItem(SHEETS_CONFIG_KEY);
+    await AsyncStorage.removeItem(sheetsConfigKey());
     setSheetsConfig(null);
     void queryClient.invalidateQueries({ queryKey: ['local-players'] });
+      // ^ matches all org-scoped variants because react-query treats keys as prefixes by default
   }, [queryClient]);
 
   const isConnected = sheetsConfig?.isConnected || false;
@@ -1368,7 +1430,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     // device receives it via realtime. Persist locally too so the admin's
     // own device stays in sync if Supabase is briefly unreachable.
     setEventModeState(mode);
-    await AsyncStorage.setItem(EVENT_MODE_KEY, mode);
+    // Optimistically apply the editor lock locally so the admin's own UI
+    // also flips immediately, before the realtime echo arrives.
+    try {
+      setEventLockedForEditors(mode === 'viewOnly');
+    } catch (err) {
+      console.warn('[eventMode] local setEventLockedForEditors failed:', err);
+    }
+    await AsyncStorage.setItem(eventModeKey(), mode);
     if (currentOrg?.id) {
       try {
         await setOrgEventMode(currentOrg.id, mode, currentOrg.ownerId);
@@ -1387,7 +1456,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     }
     console.log('Setting showTeamAssignment to:', value);
     setShowTeamAssignmentState(value);
-    await AsyncStorage.setItem(SHOW_TEAM_ASSIGNMENT_KEY, value ? 'true' : 'false');
+    await AsyncStorage.setItem(showTeamAssignmentKey(), value ? 'true' : 'false');
   }, [isAdmin]);
 
   const { mutateAsync: importPlayersAsync } = importPlayersMutation;
@@ -1420,7 +1489,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       overwriteIfMatch,
     });
 
-    const stored = await AsyncStorage.getItem(PLAYERS_STORAGE_KEY);
+    const stored = await AsyncStorage.getItem(playersKey());
     let currentPlayers: Player[] = stored ? JSON.parse(stored) : [];
 
     // CHECK FOR DEMO DATA: If we have mock players (ids 1-8), clear them
@@ -1504,9 +1573,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     console.log(`Deduplication: ${duplicatesKept} kept, ${newPlayersAdded} new, ${remainingExisting.length} preserved`);
     console.log('Total players after import:', resultPlayers.length);
     
-    await AsyncStorage.setItem(PLAYERS_STORAGE_KEY, JSON.stringify(resultPlayers));
+    await AsyncStorage.setItem(playersKey(), JSON.stringify(resultPlayers));
     memoryPlayerCache = resultPlayers;
-    queryClient.setQueryData(['local-players'], resultPlayers);
+    queryClient.setQueryData(['local-players', orgScopeRef.current], resultPlayers);
     pushPlayersToRemote(resultPlayers);
 
     return {
@@ -1559,6 +1628,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const refreshData = useCallback(() => {
     console.log('Manual refresh triggered, isConnected:', isConnected);
     void queryClient.invalidateQueries({ queryKey: ['local-players'] });
+      // ^ matches all org-scoped variants because react-query treats keys as prefixes by default
     void queryClient.invalidateQueries({ queryKey: ['sheets-players-stub'] });
   }, [queryClient]);
 
