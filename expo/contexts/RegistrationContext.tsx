@@ -21,6 +21,11 @@ import {
   type FlushResult,
 } from '@/lib/cloudSyncQueue';
 import {
+  runFinalReconcile,
+  hasReconcileRun,
+  type ReconcileResult,
+} from '@/lib/finalReconcile';
+import {
   loadCachedRegistry,
   fetchRegistryFromRemote,
   markPlayerAgeVerified,
@@ -1329,14 +1334,19 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     playersRef.current = players;
   }, [players]);
 
+  const currentOrgCodeRef = useRef<string | null>(null);
+  currentOrgCodeRef.current = currentOrg?.code ?? null;
+
   const forceSyncAllToCloud = useCallback(async (): Promise<{
     ok: boolean;
     synced: number;
     skipped: number;
     failed: number;
     error?: string;
+    reconcile?: ReconcileResult;
   }> => {
     const orgId = cloudOrgRef.current;
+    const orgCode = currentOrgCodeRef.current;
     if (!orgId) {
       return { ok: false, synced: 0, skipped: 0, failed: 0, error: 'No organization selected.' };
     }
@@ -1346,6 +1356,27 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     isCloudSyncingRef.current = true;
     setIsCloudSyncing(true);
     try {
+      let reconcileResult: ReconcileResult | undefined;
+      if (orgCode) {
+        try {
+          console.log('[cloudSync] running final reconcile for org', orgCode);
+          reconcileResult = await runFinalReconcile(orgId, orgCode, dedupePlayers);
+          if (reconcileResult.mergedTotal > 0) {
+            memoryPlayerCache = null;
+            try {
+              const stored = await AsyncStorage.getItem(playersKey());
+              const merged: Player[] = stored ? JSON.parse(stored) : [];
+              memoryPlayerCache = merged;
+              queryClient.setQueryData(['local-players', orgScopeRef.current], merged);
+            } catch (err) {
+              console.warn('[cloudSync] failed to refresh local cache after reconcile:', err);
+            }
+          }
+        } catch (err) {
+          console.warn('[cloudSync] reconcile threw, continuing with regular force-push:', err);
+        }
+      }
+
       const all = playersRef.current;
       console.log('[cloudSync] force-syncing entire roster:', all.length, 'players');
       const result = await forcePushAllPlayers(orgId, all);
@@ -1374,16 +1405,16 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       setLastCloudSyncedAt(now);
       await saveLastCloudSync(orgId, now);
 
-      const synced = result.synced.length + queueResult.synced.length;
-      const skipped = result.skipped.length + queueResult.skipped.length;
-      const failed = result.failed.length + queueResult.failed.length;
+      const synced = result.synced.length + queueResult.synced.length + (reconcileResult?.pushed ?? 0);
+      const skipped = result.skipped.length + queueResult.skipped.length + (reconcileResult?.skipped ?? 0);
+      const failed = result.failed.length + queueResult.failed.length + (reconcileResult?.failed ?? 0);
       setLastCloudSyncResult({
         synced: [...result.synced, ...queueResult.synced],
         skipped: [...result.skipped, ...queueResult.skipped],
         failed: [...result.failed, ...queueResult.failed],
       });
-      console.log('[cloudSync] force-sync complete', { synced, skipped, failed });
-      return { ok: failed === 0, synced, skipped, failed };
+      console.log('[cloudSync] force-sync complete', { synced, skipped, failed, reconcile: reconcileResult });
+      return { ok: failed === 0, synced, skipped, failed, reconcile: reconcileResult };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn('[cloudSync] force-sync failed:', message);
@@ -1392,7 +1423,69 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       isCloudSyncingRef.current = false;
       setIsCloudSyncing(false);
     }
-  }, [persistCloudQueue]);
+  }, [persistCloudQueue, queryClient, playersKey]);
+
+  // ---------------------------------------------------------------------------
+  // One-shot "final reconcile" that runs automatically on launch the first time
+  // a volunteer opens this version of the app. It sweeps every AsyncStorage
+  // scope on the device, pulls rosters from any duplicate cloud orgs sharing
+  // the same invite code, dedupes everything (newest-wins), and force-pushes
+  // the merged result to the canonical cloud org. After it runs once, a flag
+  // in AsyncStorage prevents it from running again. Admins can still re-run it
+  // on demand via the Force Sync to Cloud button in Settings.
+  // ---------------------------------------------------------------------------
+  const reconcileLaunchRanRef = useRef<boolean>(false);
+  useEffect(() => {
+    const orgId = currentOrg?.id;
+    const orgCode = currentOrg?.code;
+    if (!orgId || !orgCode) return;
+    if (reconcileLaunchRanRef.current) return;
+    if (isCloudSyncingRef.current) return;
+
+    let cancelled = false;
+    const launch = async () => {
+      const alreadyRanAt = await hasReconcileRun();
+      if (alreadyRanAt) {
+        console.log('[cloudSync] final reconcile already ran at', alreadyRanAt, '- skipping');
+        reconcileLaunchRanRef.current = true;
+        return;
+      }
+      if (cancelled) return;
+      reconcileLaunchRanRef.current = true;
+      console.log('[cloudSync] launching one-shot final reconcile for', orgCode);
+      isCloudSyncingRef.current = true;
+      setIsCloudSyncing(true);
+      try {
+        const result = await runFinalReconcile(orgId, orgCode, dedupePlayers);
+        if (cancelled) return;
+        if (result.mergedTotal > 0) {
+          try {
+            const stored = await AsyncStorage.getItem(playersKey());
+            const merged: Player[] = stored ? JSON.parse(stored) : [];
+            memoryPlayerCache = merged;
+            queryClient.setQueryData(['local-players', orgScopeRef.current], merged);
+          } catch (err) {
+            console.warn('[cloudSync] launch reconcile cache refresh failed:', err);
+          }
+        }
+        const now = new Date().toISOString();
+        setLastCloudSyncedAt(now);
+        await saveLastCloudSync(orgId, now);
+        console.log('[cloudSync] launch reconcile finished', result);
+      } catch (err) {
+        console.warn('[cloudSync] launch reconcile failed:', err);
+      } finally {
+        if (!cancelled) {
+          isCloudSyncingRef.current = false;
+          setIsCloudSyncing(false);
+        }
+      }
+    };
+    void launch();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentOrg?.id, currentOrg?.code, queryClient, playersKey]);
 
   const clubs: Club[] = useMemo(() => {
     const uniqueClubs = new Map<string, Club>();

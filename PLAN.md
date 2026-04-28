@@ -44,6 +44,17 @@ Right now, when a volunteer updates a player's weight, photo, or check-in status
 - A direct way to tell volunteers: *"open the app and tap Force Sync Now in Settings"* — and know it actually pushes everything.
 - Clear visual proof on each device of whether they're caught up or behind.
 
+## Final reconcile (one-shot, ships in this update)
+
+When a volunteer opens the app after this update, a one-time reconcile runs automatically in the background:
+
+- [x] Sweep every AsyncStorage scope on the device (current org + any legacy org_ids) and collect every cached player.
+- [x] Look up every cloud org that shares the same invite code as the org the user is signed into; pull rosters from all of them in case duplicates exist.
+- [x] Combine local + cloud rosters and dedupe by name+DOB, keeping the richest record (photos, weight, check-in, age verified).
+- [x] Force-push the merged roster to the canonical cloud org with a fresh "now" timestamp so this update wins over any stale data.
+- [x] Persist the merged roster locally under the canonical org scope.
+- [x] Tracked via a `final_reconcile_v2_done` flag so it only runs once per install (the existing **Force Sync to Cloud** button re-runs it on demand).
+
 ## Out of scope (not changing)
 
 - The Google Sheets queue stays as it is — this is a separate Supabase queue.
