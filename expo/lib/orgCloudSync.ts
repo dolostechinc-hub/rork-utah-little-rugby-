@@ -3,6 +3,42 @@ import Constants from 'expo-constants';
 const FALLBACK_SUPABASE_URL = 'https://pfhkypuavngiidyrrnpn.supabase.co';
 const FALLBACK_SUPABASE_ANON_KEY = 'sb_publishable_o6d-VXD_hzD1AYntd2_guw_dj-8ZyYX';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function hashStringToHex(s: string, len: number): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0xdeadbeef;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619);
+    h2 = Math.imul(h2 ^ c, 2246822519);
+  }
+  let out = '';
+  let v1 = h1 >>> 0;
+  let v2 = h2 >>> 0;
+  while (out.length < len) {
+    out += v1.toString(16).padStart(8, '0');
+    out += v2.toString(16).padStart(8, '0');
+    v1 = Math.imul(v1 ^ 0x9e3779b9, 2654435761) >>> 0;
+    v2 = Math.imul(v2 ^ 0x85ebca6b, 2246822519) >>> 0;
+  }
+  return out.slice(0, len);
+}
+
+export function coerceToUUID(input: string | null | undefined, salt: string = ''): string {
+  const v = (input ?? '').trim();
+  if (UUID_RE.test(v)) return v.toLowerCase();
+  const seed = `${salt}::${v || 'empty'}`;
+  const hex = hashStringToHex(seed, 32);
+  const part1 = hex.slice(0, 8);
+  const part2 = hex.slice(8, 12);
+  const part3 = '4' + hex.slice(13, 16);
+  const yNibble = ((parseInt(hex.charAt(16), 16) & 0x3) | 0x8).toString(16);
+  const part4 = yNibble + hex.slice(17, 20);
+  const part5 = hex.slice(20, 32);
+  return `${part1}-${part2}-${part3}-${part4}-${part5}`;
+}
+
 export function getSupabaseRestConfig(): { url: string; key: string } {
   const url =
     process.env.EXPO_PUBLIC_SUPABASE_URL ??
@@ -108,10 +144,19 @@ export interface UpsertMemberInput {
 }
 
 export async function restUpsertMember(m: UpsertMemberInput): Promise<{ ok: true } | { ok: false; error: string }> {
+  const safeOrgId = coerceToUUID(m.orgId, 'org');
+  const safeUserId = coerceToUUID(m.userId, `user::${safeOrgId}`);
+  const safeId = coerceToUUID(m.id, `member::${safeOrgId}::${safeUserId}`);
+  if (safeId !== m.id || safeOrgId !== m.orgId || safeUserId !== m.userId) {
+    console.log('[restUpsertMember] coerced legacy non-UUID ids', {
+      origId: m.id, origOrgId: m.orgId, origUserId: m.userId,
+      safeId, safeOrgId, safeUserId,
+    });
+  }
   const r = await rpcPost<unknown>('public_upsert_org_member', {
-    p_id: m.id,
-    p_org_id: m.orgId,
-    p_user_id: m.userId,
+    p_id: safeId,
+    p_org_id: safeOrgId,
+    p_user_id: safeUserId,
     p_role: m.role,
     p_email: m.email ?? '',
     p_name: m.name ?? '',
