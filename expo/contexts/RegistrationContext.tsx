@@ -2,11 +2,24 @@ import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import NetInfo from '@react-native-community/netinfo';
 import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } from '@/types';
 import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOrganization } from '@/contexts/OrganizationContext';
+import {
+  loadCloudSyncQueue,
+  saveCloudSyncQueue,
+  loadLastCloudSync,
+  saveLastCloudSync,
+  buildItem,
+  mergeIntoQueue,
+  flushCloudSyncQueue,
+  forcePushAllPlayers,
+  type CloudSyncItem,
+  type FlushResult,
+} from '@/lib/cloudSyncQueue';
 import {
   loadCachedRegistry,
   fetchRegistryFromRemote,
@@ -630,27 +643,184 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     };
   }, [currentOrg?.id, revalidateEditorSession, setEventLockedForEditors]);
 
+  // ---------------------------------------------------------------------------
+  // Cloud sync queue
+  // Every roster edit is enqueued to a per-org persistent queue and flushed
+  // to Supabase. If the network is flaky, the item stays in the queue and
+  // gets retried on launch / reconnect / Settings -> Force Sync Now.
+  // ---------------------------------------------------------------------------
+  const [cloudQueue, setCloudQueue] = useState<CloudSyncItem[]>([]);
+  const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(false);
+  const [lastCloudSyncedAt, setLastCloudSyncedAt] = useState<string | null>(null);
+  const [lastCloudSyncResult, setLastCloudSyncResult] = useState<FlushResult | null>(null);
+  const cloudQueueRef = useRef<CloudSyncItem[]>([]);
+  const isCloudSyncingRef = useRef<boolean>(false);
+  const cloudOrgRef = useRef<string | null>(null);
+  cloudOrgRef.current = currentOrg?.id ?? null;
+
+  useEffect(() => {
+    cloudQueueRef.current = cloudQueue;
+  }, [cloudQueue]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const orgId = currentOrg?.id ?? null;
+    setCloudQueue([]);
+    setLastCloudSyncedAt(null);
+    setLastCloudSyncResult(null);
+    if (!orgId) return;
+    void (async () => {
+      const [queue, last] = await Promise.all([
+        loadCloudSyncQueue(orgId),
+        loadLastCloudSync(orgId),
+      ]);
+      if (cancelled) return;
+      console.log('[cloudSync] loaded queue for', orgId, '->', queue.length, 'items');
+      setCloudQueue(queue);
+      setLastCloudSyncedAt(last);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentOrg?.id]);
+
+  const persistCloudQueue = useCallback(
+    async (orgId: string, next: CloudSyncItem[]) => {
+      cloudQueueRef.current = next;
+      setCloudQueue(next);
+      await saveCloudSyncQueue(orgId, next);
+    },
+    [],
+  );
+
+  const enqueueCloudWrite = useCallback(
+    (player: Player) => {
+      const orgId = currentOrg?.id;
+      if (!orgId) return;
+      const item = buildItem(orgId, player);
+      const next = mergeIntoQueue(cloudQueueRef.current, item);
+      void persistCloudQueue(orgId, next);
+      console.log('[cloudSync] enqueued', player.id, 'queue size:', next.length);
+    },
+    [currentOrg?.id, persistCloudQueue],
+  );
+
+  const enqueueCloudWrites = useCallback(
+    (playersBatch: Player[]) => {
+      const orgId = currentOrg?.id;
+      if (!orgId || playersBatch.length === 0) return;
+      let next = cloudQueueRef.current;
+      for (const p of playersBatch) {
+        next = mergeIntoQueue(next, buildItem(orgId, p));
+      }
+      void persistCloudQueue(orgId, next);
+      console.log('[cloudSync] enqueued batch', playersBatch.length, 'queue size:', next.length);
+    },
+    [currentOrg?.id, persistCloudQueue],
+  );
+
+  const flushCloudQueueNow = useCallback(async (): Promise<FlushResult | null> => {
+    const orgId = cloudOrgRef.current;
+    if (!orgId) return null;
+    if (isCloudSyncingRef.current) {
+      console.log('[cloudSync] flush already in progress, skipping');
+      return null;
+    }
+    const items = cloudQueueRef.current;
+    if (items.length === 0) {
+      const now = new Date().toISOString();
+      setLastCloudSyncedAt(now);
+      await saveLastCloudSync(orgId, now);
+      return { synced: [], skipped: [], failed: [] };
+    }
+    isCloudSyncingRef.current = true;
+    setIsCloudSyncing(true);
+    try {
+      console.log('[cloudSync] flushing', items.length, 'items for org', orgId);
+      const result = await flushCloudSyncQueue(orgId, items);
+      const handled = new Set([...result.synced, ...result.skipped]);
+      const remaining = items
+        .filter((i) => !handled.has(i.id))
+        .map((i) => {
+          const fail = result.failed.find((f) => f.itemId === i.id);
+          return {
+            ...i,
+            retries: i.retries + 1,
+            lastTriedAt: new Date().toISOString(),
+            lastError: fail?.error ?? i.lastError,
+          };
+        });
+      await persistCloudQueue(orgId, remaining);
+      const now = new Date().toISOString();
+      setLastCloudSyncedAt(now);
+      await saveLastCloudSync(orgId, now);
+      setLastCloudSyncResult(result);
+      console.log(
+        '[cloudSync] flush done. synced:',
+        result.synced.length,
+        'skipped:',
+        result.skipped.length,
+        'failed:',
+        result.failed.length,
+        'remaining:',
+        remaining.length,
+      );
+      return result;
+    } catch (err) {
+      console.warn('[cloudSync] flush threw:', err);
+      return null;
+    } finally {
+      isCloudSyncingRef.current = false;
+      setIsCloudSyncing(false);
+    }
+  }, [persistCloudQueue]);
+
   const pushPlayerToRemote = useCallback(
     (player: Player) => {
       const orgId = currentOrg?.id;
       if (!orgId) return;
-      void upsertRosterPlayer(orgId, player).catch((err) => {
-        console.warn('[rosterSync] background upsert failed:', err?.message ?? err);
-      });
+      enqueueCloudWrite(player);
+      void flushCloudQueueNow();
     },
-    [currentOrg?.id],
+    [currentOrg?.id, enqueueCloudWrite, flushCloudQueueNow],
   );
 
   const pushPlayersToRemote = useCallback(
     (playersBatch: Player[]) => {
       const orgId = currentOrg?.id;
       if (!orgId || playersBatch.length === 0) return;
-      void upsertRosterPlayers(orgId, playersBatch).catch((err) => {
-        console.warn('[rosterSync] background bulk upsert failed:', err?.message ?? err);
-      });
+      enqueueCloudWrites(playersBatch);
+      void flushCloudQueueNow();
     },
-    [currentOrg?.id],
+    [currentOrg?.id, enqueueCloudWrites, flushCloudQueueNow],
   );
+
+  // Auto-flush on launch (when org loads) and on network reconnect.
+  useEffect(() => {
+    const orgId = currentOrg?.id;
+    if (!orgId) return;
+    void flushCloudQueueNow();
+  }, [currentOrg?.id, flushCloudQueueNow]);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const online = state.isConnected ?? true;
+      if (online && cloudOrgRef.current) {
+        console.log('[cloudSync] network back online, flushing queue');
+        void flushCloudQueueNow();
+      }
+    });
+    return () => unsubscribe();
+  }, [flushCloudQueueNow]);
+
+  // Periodic retry while there is a backlog.
+  useEffect(() => {
+    if (cloudQueue.length === 0) return;
+    const id = setInterval(() => {
+      void flushCloudQueueNow();
+    }, 30000);
+    return () => clearInterval(id);
+  }, [cloudQueue.length, flushCloudQueueNow]);
 
   useEffect(() => {
     if (!sheetsConfig?.isConnected) return;
@@ -1153,6 +1323,76 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     }
     return deduped;
   }, [isConnected, sheetsPlayersQuery.data, localPlayersQuery.data]);
+
+  const playersRef = useRef<Player[]>([]);
+  useEffect(() => {
+    playersRef.current = players;
+  }, [players]);
+
+  const forceSyncAllToCloud = useCallback(async (): Promise<{
+    ok: boolean;
+    synced: number;
+    skipped: number;
+    failed: number;
+    error?: string;
+  }> => {
+    const orgId = cloudOrgRef.current;
+    if (!orgId) {
+      return { ok: false, synced: 0, skipped: 0, failed: 0, error: 'No organization selected.' };
+    }
+    if (isCloudSyncingRef.current) {
+      return { ok: false, synced: 0, skipped: 0, failed: 0, error: 'A sync is already in progress.' };
+    }
+    isCloudSyncingRef.current = true;
+    setIsCloudSyncing(true);
+    try {
+      const all = playersRef.current;
+      console.log('[cloudSync] force-syncing entire roster:', all.length, 'players');
+      const result = await forcePushAllPlayers(orgId, all);
+
+      // After a force push, also try to drain anything queued.
+      const remainingQueue = cloudQueueRef.current;
+      let queueResult: FlushResult = { synced: [], skipped: [], failed: [] };
+      if (remainingQueue.length > 0) {
+        queueResult = await flushCloudSyncQueue(orgId, remainingQueue);
+        const handled = new Set([...queueResult.synced, ...queueResult.skipped]);
+        const remaining = remainingQueue
+          .filter((i) => !handled.has(i.id))
+          .map((i) => {
+            const fail = queueResult.failed.find((f) => f.itemId === i.id);
+            return {
+              ...i,
+              retries: i.retries + 1,
+              lastTriedAt: new Date().toISOString(),
+              lastError: fail?.error ?? i.lastError,
+            };
+          });
+        await persistCloudQueue(orgId, remaining);
+      }
+
+      const now = new Date().toISOString();
+      setLastCloudSyncedAt(now);
+      await saveLastCloudSync(orgId, now);
+
+      const synced = result.synced.length + queueResult.synced.length;
+      const skipped = result.skipped.length + queueResult.skipped.length;
+      const failed = result.failed.length + queueResult.failed.length;
+      setLastCloudSyncResult({
+        synced: [...result.synced, ...queueResult.synced],
+        skipped: [...result.skipped, ...queueResult.skipped],
+        failed: [...result.failed, ...queueResult.failed],
+      });
+      console.log('[cloudSync] force-sync complete', { synced, skipped, failed });
+      return { ok: failed === 0, synced, skipped, failed };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[cloudSync] force-sync failed:', message);
+      return { ok: false, synced: 0, skipped: 0, failed: 0, error: message };
+    } finally {
+      isCloudSyncingRef.current = false;
+      setIsCloudSyncing(false);
+    }
+  }, [persistCloudQueue]);
 
   const clubs: Club[] = useMemo(() => {
     const uniqueClubs = new Map<string, Club>();
@@ -1844,6 +2084,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     setShowTeamAssignment,
     isPreviouslyAgeVerified,
     verifiedRegistryCount: verifiedRegistry.size,
+    cloudPendingCount: cloudQueue.length,
+    cloudPendingItems: cloudQueue,
+    isCloudSyncing,
+    lastCloudSyncedAt,
+    lastCloudSyncResult,
+    flushCloudQueueNow,
+    forceSyncAllToCloud,
   }), [
     players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
     updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
@@ -1859,6 +2106,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     eventMode, setEventMode,
     showTeamAssignment, setShowTeamAssignment,
     isPreviouslyAgeVerified, verifiedRegistry,
+    cloudQueue, isCloudSyncing, lastCloudSyncedAt, lastCloudSyncResult,
+    flushCloudQueueNow, forceSyncAllToCloud,
   ]);
 });
 

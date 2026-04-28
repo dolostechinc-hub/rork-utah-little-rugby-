@@ -113,7 +113,20 @@ export default function SettingsScreen() {
     showTeamAssignment,
     setShowTeamAssignment,
     players,
-  } = useRegistration();
+    cloudPendingCount,
+    isCloudSyncing,
+    lastCloudSyncedAt,
+    lastCloudSyncResult,
+    flushCloudQueueNow,
+    forceSyncAllToCloud,
+  } = useRegistration() as ReturnType<typeof useRegistration> & {
+    cloudPendingCount: number;
+    isCloudSyncing: boolean;
+    lastCloudSyncedAt: string | null;
+    lastCloudSyncResult: { synced: string[]; skipped: string[]; failed: { itemId: string; playerId: string; error: string }[] } | null;
+    flushCloudQueueNow: () => Promise<unknown>;
+    forceSyncAllToCloud: () => Promise<{ ok: boolean; synced: number; skipped: number; failed: number; error?: string }>;
+  };
 
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
@@ -1356,6 +1369,97 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Cloud Sync</Text>
+        <View style={styles.cloudSyncCard}>
+          <View style={styles.cloudSyncHeader}>
+            <View style={[styles.iconBg, { backgroundColor: '#E0F2FE' }]}>
+              <Database size={22} color="#0369A1" />
+            </View>
+            <View style={styles.cloudSyncHeaderText}>
+              <Text style={styles.cloudSyncTitle}>Supabase sync status</Text>
+              <Text style={styles.cloudSyncSubtitle}>
+                Keeps every device&apos;s edits in the shared cloud roster
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.cloudStatRow}>
+            <View style={styles.cloudStatItem}>
+              <Text style={styles.cloudStatLabel}>Pending</Text>
+              <Text style={[styles.cloudStatValue, cloudPendingCount > 0 && styles.cloudStatValueWarn]}>
+                {cloudPendingCount}
+              </Text>
+            </View>
+            <View style={styles.cloudStatDivider} />
+            <View style={styles.cloudStatItem}>
+              <Text style={styles.cloudStatLabel}>Last synced</Text>
+              <Text style={styles.cloudStatValue}>
+                {lastCloudSyncedAt
+                  ? new Date(lastCloudSyncedAt).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })
+                  : 'Never'}
+              </Text>
+            </View>
+          </View>
+
+          {lastCloudSyncResult && (
+            <View style={styles.cloudResultRow}>
+              <CheckCircle2 size={14} color={Colors.success} />
+              <Text style={styles.cloudResultText}>
+                Last run: {lastCloudSyncResult.synced.length} synced ·{' '}
+                {lastCloudSyncResult.skipped.length} skipped ·{' '}
+                {lastCloudSyncResult.failed.length} failed
+              </Text>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[styles.forceSyncButton, isCloudSyncing && styles.forceSyncButtonDisabled]}
+            disabled={isCloudSyncing}
+            activeOpacity={0.85}
+            onPress={async () => {
+              const result = await forceSyncAllToCloud();
+              if (result.error) {
+                Alert.alert('Sync failed', result.error);
+                return;
+              }
+              if (result.failed > 0) {
+                Alert.alert(
+                  'Partial sync',
+                  `${result.synced} synced, ${result.skipped} kept (cloud was newer), ${result.failed} failed. The app will keep retrying the failures automatically.`,
+                );
+              } else {
+                Alert.alert(
+                  'Sync complete',
+                  `${result.synced} pushed to cloud, ${result.skipped} kept (cloud already had newer data).`,
+                );
+              }
+            }}
+            testID="force-sync-now"
+          >
+            {isCloudSyncing ? (
+              <ActivityIndicator size={18} color={Colors.white} />
+            ) : (
+              <RefreshCw size={18} color={Colors.white} />
+            )}
+            <Text style={styles.forceSyncButtonText}>
+              {isCloudSyncing ? 'Syncing...' : 'Force Sync Now'}
+            </Text>
+          </TouchableOpacity>
+
+          <View style={styles.cloudInfoRow}>
+            <Info size={14} color={Colors.textSecondary} />
+            <Text style={styles.cloudInfoText}>
+              Pushes every player on this device to the shared cloud. Newest edit
+              wins — older changes never overwrite fresher data.
+            </Text>
+          </View>
+        </View>
+      </View>
 
       {canEdit && (
         <View style={styles.section}>
@@ -5132,6 +5236,105 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     color: Colors.error,
+  },
+  cloudSyncCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  cloudSyncHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 14,
+  },
+  cloudSyncHeaderText: {
+    flex: 1,
+  },
+  cloudSyncTitle: {
+    fontSize: 16,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  cloudSyncSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+  cloudStatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surfaceAlt,
+    borderRadius: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  cloudStatItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  cloudStatLabel: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    textTransform: 'uppercase' as const,
+    letterSpacing: 0.5,
+    fontWeight: '600' as const,
+  },
+  cloudStatValue: {
+    fontSize: 18,
+    fontWeight: '700' as const,
+    color: Colors.text,
+    marginTop: 2,
+  },
+  cloudStatValueWarn: {
+    color: '#B45309',
+  },
+  cloudStatDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    backgroundColor: Colors.border,
+  },
+  cloudResultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 10,
+  },
+  cloudResultText: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  forceSyncButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  forceSyncButtonDisabled: {
+    opacity: 0.6,
+  },
+  forceSyncButtonText: {
+    color: Colors.white,
+    fontSize: 15,
+    fontWeight: '700' as const,
+  },
+  cloudInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 10,
+  },
+  cloudInfoText: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.textSecondary,
+    lineHeight: 16,
   },
   eventModeCard: {
     backgroundColor: Colors.surface,

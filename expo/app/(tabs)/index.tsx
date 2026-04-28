@@ -16,6 +16,7 @@ import { useRegistration } from '@/contexts/RegistrationContext';
 import FilterDropdown from '@/components/FilterDropdown';
 import PlayerCard from '@/components/PlayerCard';
 import StatsBar from '@/components/StatsBar';
+import CloudSyncBanner from '@/components/CloudSyncBanner';
 import Colors from '@/constants/colors';
 
 export default function CheckInScreen() {
@@ -161,6 +162,7 @@ export default function CheckInScreen() {
       </View>
 
       <View style={styles.content}>
+        <CloudSyncBanner />
         <StatsBar
           total={stats.total}
           checkedIn={stats.checkedIn}
