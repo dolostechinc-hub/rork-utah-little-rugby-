@@ -20,7 +20,14 @@ export interface RosterPlayerRow {
   checked_in_at: string | null;
   restriction_status: string | null;
   calculated_age_group: string | null;
+  // Server-managed: rewritten by the touch_roster_players_updated_at trigger
+  // on every write. Useful for replication ordering, NOT for "did the local
+  // edit win?" decisions.
   updated_at?: string;
+  // Client-managed: never touched by the trigger. The app sets this to the
+  // monotonic local-edit timestamp so a queued local edit can be compared
+  // against the latest cloud copy without the trigger lying about it.
+  client_updated_at?: string;
   updated_by?: string | null;
 }
 
@@ -54,10 +61,24 @@ export function rowToPlayer(row: RosterPlayerRow): Player {
   };
 }
 
+/**
+ * A photoUri is "shareable" (and worth writing to the cloud row) only if
+ * it's an https/http URL. Local URIs like `file:///...` are device-only
+ * and shouldn't be sent to other devices via Supabase. The photo upload
+ * queue will replace this with the real cloud URL once the upload
+ * completes, then call upsert again.
+ */
+function shareablePhotoUri(uri: string | null | undefined): string | null {
+  if (!uri) return null;
+  if (uri.startsWith('http://') || uri.startsWith('https://')) return uri;
+  return null;
+}
+
 export function playerToRow(
   orgId: string,
   player: Player,
   updatedBy?: string,
+  clientUpdatedAt?: string,
 ): Omit<RosterPlayerRow, 'updated_at'> {
   return {
     id: player.id,
@@ -72,43 +93,79 @@ export function playerToRow(
     parent_name: player.parentName ?? '',
     parent_phone: player.parentPhone ?? '',
     is_age_verified: !!player.isAgeVerified,
-    photo_uri: player.photoUri ?? null,
+    photo_uri: shareablePhotoUri(player.photoUri),
     weight: player.weight ?? '',
     checked_in: !!player.checkedIn,
     checked_in_at: player.checkedInAt ?? null,
     restriction_status: player.restrictionStatus ?? 'none',
     calculated_age_group: player.calculatedAgeGroup ?? null,
+    client_updated_at: clientUpdatedAt ?? new Date().toISOString(),
     updated_by: updatedBy ?? null,
   };
 }
 
+// Supabase / PostgREST caps a single `select()` response at 1000 rows by
+// default (configurable on the project, but we can't rely on it). Larger
+// rosters MUST be paginated; otherwise we silently truncate and the merge
+// step thinks rows past 1000 don't exist on the server, then sometimes
+// "reconciles" by deleting them. We page in fixed-size chunks ordered by a
+// stable key so realtime races can't shift rows between pages.
+const ROSTER_PAGE_SIZE = 1000;
+
 export async function fetchRoster(orgId: string): Promise<Player[]> {
   if (!orgId) return [];
   console.log('[rosterSync] fetching roster for org', orgId);
-  const { data, error } = await supabase
-    .from('roster_players')
-    .select('*')
-    .eq('org_id', orgId);
 
-  if (error) {
-    console.warn('[rosterSync] fetchRoster failed:', error.message);
-    throw error;
+  const all: RosterPlayerRow[] = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + ROSTER_PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from('roster_players')
+      .select('*')
+      .eq('org_id', orgId)
+      // Stable sort key so subsequent pages are deterministic even if
+      // rows are written concurrently. id is unique within an org under
+      // the migration 024 composite PK, so it's a safe order key.
+      .order('id', { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      console.warn('[rosterSync] fetchRoster failed:', error.message, { from, to });
+      throw error;
+    }
+
+    const rows = (data ?? []) as RosterPlayerRow[];
+    all.push(...rows);
+
+    // Last page when we received fewer rows than we asked for.
+    if (rows.length < ROSTER_PAGE_SIZE) break;
+    from += ROSTER_PAGE_SIZE;
+
+    // Safety cap so a runaway response loop can't hang the app. 100k
+    // rows per org is well above any realistic league size.
+    if (all.length >= 100_000) {
+      console.warn('[rosterSync] fetchRoster hit safety cap of 100k rows', { orgId });
+      break;
+    }
   }
-  const rows = (data ?? []) as RosterPlayerRow[];
-  console.log('[rosterSync] fetched roster rows:', rows.length);
-  return rows.map(rowToPlayer);
+
+  console.log('[rosterSync] fetched roster rows:', all.length);
+  return all.map(rowToPlayer);
 }
 
 export async function upsertRosterPlayer(
   orgId: string,
   player: Player,
   updatedBy?: string,
+  clientUpdatedAt?: string,
 ): Promise<void> {
   if (!orgId || !player?.id) return;
-  const row = playerToRow(orgId, player, updatedBy);
+  const row = playerToRow(orgId, player, updatedBy, clientUpdatedAt);
   const { error } = await supabase
     .from('roster_players')
-    .upsert(row, { onConflict: 'id' });
+    .upsert(row, { onConflict: 'org_id,id' });
   if (error) {
     console.warn('[rosterSync] upsert failed:', error.message, player.id);
     throw error;
@@ -119,15 +176,17 @@ export async function upsertRosterPlayers(
   orgId: string,
   players: Player[],
   updatedBy?: string,
+  clientUpdatedAt?: string,
 ): Promise<void> {
   if (!orgId || players.length === 0) return;
-  const rows = players.map((p) => playerToRow(orgId, p, updatedBy));
+  const stamp = clientUpdatedAt ?? new Date().toISOString();
+  const rows = players.map((p) => playerToRow(orgId, p, updatedBy, stamp));
   const CHUNK = 200;
   for (let i = 0; i < rows.length; i += CHUNK) {
     const slice = rows.slice(i, i + CHUNK);
     const { error } = await supabase
       .from('roster_players')
-      .upsert(slice, { onConflict: 'id' });
+      .upsert(slice, { onConflict: 'org_id,id' });
     if (error) {
       console.warn('[rosterSync] bulk upsert chunk failed:', error.message, {
         from: i,

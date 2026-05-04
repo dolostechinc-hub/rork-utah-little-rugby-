@@ -10,7 +10,7 @@ import {
 import { ArrowRightCircle, AlertTriangle } from 'lucide-react-native';
 import { useOrganization } from '@/contexts/OrganizationContext';
 import { useRegistration } from '@/contexts/RegistrationContext';
-import { clearReconcileFlag } from '@/lib/finalReconcile';
+import { clearAllReconcileFlags } from '@/lib/finalReconcile';
 import Colors from '@/constants/colors';
 
 const OLD_ORG_CODE = '8DJ5JM';
@@ -49,11 +49,11 @@ export default function OrgMovedBanner() {
         return;
       }
 
-      console.log('[orgMoved] joined new org, clearing reconcile flag and reconciling');
+      console.log('[orgMoved] joined new org, clearing reconcile flags and reconciling');
       try {
-        await clearReconcileFlag();
+        await clearAllReconcileFlags();
       } catch (err) {
-        console.warn('[orgMoved] clearReconcileFlag failed (non-fatal):', err);
+        console.warn('[orgMoved] clearAllReconcileFlags failed (non-fatal):', err);
       }
 
       try {

@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import NetInfo from '@react-native-community/netinfo';
 import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } from '@/types';
-import { mockPlayers, clubs as mockClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
+import { mockPlayers, clubs as fallbackClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
+import { fetchClubs } from '@/lib/clubsRepo';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOrganization } from '@/contexts/OrganizationContext';
@@ -26,6 +27,15 @@ import {
   type ReconcileResult,
 } from '@/lib/finalReconcile';
 import {
+  loadPhotoUploadQueue,
+  savePhotoUploadQueue,
+  buildPhotoUploadItem,
+  mergeIntoPhotoQueue,
+  flushPhotoUploadQueue,
+  type PhotoUploadItem,
+} from '@/lib/photoUploadQueue';
+import { randomId } from '@/lib/ids';
+import {
   loadCachedRegistry,
   fetchRegistryFromRemote,
   markPlayerAgeVerified,
@@ -36,7 +46,6 @@ import {
   upsertRosterPlayer,
   upsertRosterPlayers,
   subscribeToRoster,
-  deleteRosterPlayer,
   type RosterChange,
 } from '@/lib/rosterSync';
 import {
@@ -253,6 +262,35 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const [importedAgeGroups, setImportedAgeGroups] = useState<AgeGroup[]>([]);
   const [importedDivisions, setImportedDivisions] = useState<Division[]>([]);
 
+  // Canonical clubs come from `public.clubs` (migration 025). They are the
+  // ONLY source of truth for the club picker — we no longer derive clubs
+  // from player rows or sheet/CSV import metadata, because that's how the
+  // variant-spelling problem was being reintroduced. While the fetch is in
+  // flight (or offline), we serve the static fallback list which mirrors
+  // the seed in migration 025.
+  const [canonicalClubs, setCanonicalClubs] = useState<Club[]>(fallbackClubs);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const fetched = await fetchClubs();
+        if (cancelled) return;
+        if (fetched.length > 0) {
+          setCanonicalClubs(fetched);
+        }
+      } catch (err) {
+        // Network failure or migration not yet applied. Keep the static
+        // fallback so the dropdown still works; log so we can spot it
+        // in dev.
+        console.warn('[RegistrationContext] fetchClubs failed, using static fallback:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Define Team type locally for the context if not imported
   type TeamOption = { id: string; name: string; club?: string; ageGroup?: string; division?: string };
 
@@ -424,6 +462,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const pendingChangesRef = useRef<Map<string, RosterChange>>(new Map());
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Forward-ref to flushCloudQueueNow so the queue-aware mergeRemoteRoster
+  // effect (declared above the useCallback below) can call it safely. The
+  // useCallback wires this ref the first time it runs.
+  const flushCloudQueueRef = useRef<(() => Promise<FlushResult | null>) | null>(null);
+
   const playersEqual = useCallback((a: Player, b: Player): boolean => {
     return (
       a.id === b.id &&
@@ -507,52 +550,127 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     if (!currentOrg?.id) return;
     let cancelled = false;
 
+    // Audit High: previously this effect blindly overwrote any local
+    // player by ID with the remote copy before the cloud queue had even
+    // loaded. If a volunteer had unsynced offline edits, they were
+    // silently dropped on the next launch.
+    //
+    // Fix: load the persisted cloud sync queue first, layer it on top of
+    // local storage so the map represents "what this device thinks the
+    // truth is, including writes not yet pushed", then merge remote rows
+    // per-field via mergePlayerRecords. Local-only fields (a freshly
+    // captured photo / weight that isn't on the server yet) survive.
+    // Finally, kick off a queue flush so the merged-but-unpushed edits
+    // get up to Supabase ASAP.
     const mergeRemoteRoster = async () => {
       try {
+        const stored = await AsyncStorage.getItem(playersKey());
+        if (cancelled) return;
+        const localStored: Player[] = stored ? JSON.parse(stored) : [];
+
+        // Read the queue directly from AsyncStorage (instead of from
+        // cloudQueueRef.current) because the queue-loading effect runs
+        // independently and may not have populated state yet.
+        const persistedQueue = await loadCloudSyncQueue(currentOrg.id);
+        if (cancelled) return;
+        const queuedById = new Map<string, Player>();
+        for (const q of persistedQueue) {
+          queuedById.set(q.playerId, q.player);
+        }
+
+        // Build "current local truth" = stored players, with any queued
+        // edit overlaying its previous version.
+        const localById = new Map<string, Player>();
+        for (const p of localStored) {
+          const queued = queuedById.get(p.id);
+          localById.set(p.id, queued ?? p);
+        }
+        // Include queue-only entries that aren't in storage yet (new
+        // players added offline that haven't been persisted to the local
+        // roster blob for any reason).
+        for (const q of persistedQueue) {
+          if (!localById.has(q.playerId)) {
+            localById.set(q.playerId, q.player);
+          }
+        }
+
         const remote = await fetchRoster(currentOrg.id);
         if (cancelled) return;
-        if (remote.length === 0) {
-          console.log('[rosterSync] remote roster empty, keeping local');
+
+        if (remote.length === 0 && localById.size === 0) {
+          console.log('[rosterSync] both remote and local empty, nothing to merge');
           return;
         }
-        const stored = await AsyncStorage.getItem(playersKey());
-        const local: Player[] = stored ? JSON.parse(stored) : [];
 
-        const byId = new Map<string, Player>();
-        local.forEach((p) => byId.set(p.id, p));
-        remote.forEach((p) => byId.set(p.id, p));
-        const combined = Array.from(byId.values());
+        // Merge. For ids only in one side: take that side. For ids in
+        // both: per-field merge with local first so any local-only field
+        // (photo, weight, check-in) survives a stale remote row.
+        const mergedById = new Map<string, Player>(localById);
+        for (const r of remote) {
+          const local = mergedById.get(r.id);
+          if (!local) {
+            mergedById.set(r.id, r);
+          } else {
+            mergedById.set(r.id, mergePlayerRecords(local, r));
+          }
+        }
 
+        const combined = Array.from(mergedById.values());
         const { deduped, duplicateIds } = dedupePlayers(combined);
 
         memoryPlayerCache = deduped;
         await AsyncStorage.setItem(playersKey(), JSON.stringify(deduped));
         queryClient.setQueryData(['local-players', orgScopeRef.current], deduped);
-        console.log('[rosterSync] merged + deduped remote roster:', {
+        console.log('[rosterSync] merged remote roster (queue-aware):', {
           remote: remote.length,
-          local: local.length,
+          localStored: localStored.length,
+          queued: persistedQueue.length,
           combined: combined.length,
           deduped: deduped.length,
-          duplicatesRemoved: duplicateIds.length,
+          duplicatesDetected: duplicateIds.length,
         });
 
+        // SAFETY: we deliberately do NOT auto-delete cloud rows or
+        // auto-re-upsert "canonical" rows here, even when the local dedupe
+        // collapses two players together. Reasons:
+        //
+        //   1. dedupePlayers() groups by (firstName, lastName, dateOfBirth).
+        //      That can collide real distinct people who share that key —
+        //      twins, name reuse, missing DOBs — and we have no way to
+        //      tell from the client.
+        //
+        //   2. If fetchRoster() ever returns a partial result (a network
+        //      blip, an RLS filter, an unpaginated 1000-row PostgREST cap),
+        //      a row that's actually in the cloud but absent from this
+        //      response is indistinguishable from a duplicate. We had
+        //      exactly that bug before pagination was added: rows past
+        //      index 1000 were silently truncated and the dedupe was
+        //      flagging valid rows for deletion.
+        //
+        //   3. Two devices running this dedupe concurrently can pick
+        //      different "canonical" winners and fight each other.
+        //
+        // Cleaning duplicates in the cloud is an admin operation that
+        // requires explicit opt-in, a backup, and confirmation. It does
+        // not belong in the launch merge path. We log so duplicates are
+        // visible during triage; the in-memory deduped list keeps the
+        // UI clean without touching the server.
         if (duplicateIds.length > 0) {
-          const remoteIds = new Set(remote.map((p) => p.id));
-          const toDeleteRemote = duplicateIds.filter((id) => remoteIds.has(id));
-          if (toDeleteRemote.length > 0) {
-            console.log('[rosterSync] cleaning duplicate rows from Supabase:', toDeleteRemote.length);
-            for (const dupId of toDeleteRemote) {
-              if (cancelled) return;
-              void deleteRosterPlayer(currentOrg.id, dupId).catch((e) =>
-                console.warn('[rosterSync] dup delete failed:', e?.message ?? e),
-              );
-            }
-          }
-          const canonicalIds = new Set(deduped.map((p) => p.id));
-          const toPush = deduped.filter((p) => canonicalIds.has(p.id));
-          void upsertRosterPlayers(currentOrg.id, toPush).catch((e) =>
-            console.warn('[rosterSync] canonical re-upsert failed:', e?.message ?? e),
+          console.warn(
+            '[rosterSync] dedupe collapsed local view; cloud rows preserved.',
+            'Inspect via SQL and run an explicit admin cleanup if intentional.',
+            { duplicateIdsSample: duplicateIds.slice(0, 10), duplicateCount: duplicateIds.length },
           );
+        }
+
+        // After we've reconciled local + remote, push anything still in
+        // the queue. flushCloudQueueRef is wired by the useCallback below;
+        // it may be null on the very first render, in which case the
+        // separate "auto-flush on launch" effect at line ~810 will catch
+        // it on the next tick.
+        if (!cancelled) {
+          const flush = flushCloudQueueRef.current;
+          if (flush) void flush();
         }
       } catch (err) {
         console.warn('[rosterSync] initial fetch failed (using local cache):', err);
@@ -575,7 +693,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       }
       pendingChangesRef.current = new Map();
     };
-  }, [currentOrg?.id, queryClient, applyRosterChangeLocally]);
+  }, [currentOrg?.id, queryClient, applyRosterChangeLocally, playersKey]);
 
   // ---------------------------------------------------------------------------
   // Cross-device event_mode sync.
@@ -736,14 +854,19 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       const now = new Date().toISOString();
       setLastCloudSyncedAt(now);
       await saveLastCloudSync(orgId, now);
-      return { synced: [], skipped: [], failed: [] };
+      return { synced: [], merged: [], failed: [] };
     }
     isCloudSyncingRef.current = true;
     setIsCloudSyncing(true);
     try {
       console.log('[cloudSync] flushing', items.length, 'items for org', orgId);
-      const result = await flushCloudSyncQueue(orgId, items);
-      const handled = new Set([...result.synced, ...result.skipped]);
+      // Audit Critical #2: pass the per-field merge function so items
+      // where the remote is newer get merged + pushed instead of being
+      // silently skipped. Only items that are actually `synced` or
+      // `merged` (both have written something authoritative to Supabase)
+      // are dropped from the queue. Failures stay in for the next retry.
+      const result = await flushCloudSyncQueue(orgId, items, mergePlayerRecords);
+      const handled = new Set([...result.synced, ...result.merged]);
       const remaining = items
         .filter((i) => !handled.has(i.id))
         .map((i) => {
@@ -763,8 +886,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log(
         '[cloudSync] flush done. synced:',
         result.synced.length,
-        'skipped:',
-        result.skipped.length,
+        'merged:',
+        result.merged.length,
         'failed:',
         result.failed.length,
         'remaining:',
@@ -779,6 +902,15 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       setIsCloudSyncing(false);
     }
   }, [persistCloudQueue]);
+
+  // Wire the forward-ref so mergeRemoteRoster (declared above this
+  // useCallback) can call flushCloudQueueNow without creating a TDZ.
+  useEffect(() => {
+    flushCloudQueueRef.current = flushCloudQueueNow;
+    return () => {
+      // Don't null it on unmount; another mount might race the cleanup.
+    };
+  }, [flushCloudQueueNow]);
 
   const pushPlayerToRemote = useCallback(
     (player: Player) => {
@@ -800,23 +932,154 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     [currentOrg?.id, enqueueCloudWrites, flushCloudQueueNow],
   );
 
+  // ---------------------------------------------------------------------------
+  // Photo upload queue (audit Medium #2)
+  // Decoupled from the rest of save() so a photo upload failure can't block
+  // the local check-in. The screen saves the player with the local file://
+  // URI, then enqueues an upload here. When the upload eventually succeeds,
+  // we patch the player record's photoUri to the cloud URL and re-sync.
+  // ---------------------------------------------------------------------------
+  const [photoUploadQueue, setPhotoUploadQueue] = useState<PhotoUploadItem[]>([]);
+  const photoUploadQueueRef = useRef<PhotoUploadItem[]>([]);
+  const isPhotoUploadingRef = useRef<boolean>(false);
+  useEffect(() => {
+    photoUploadQueueRef.current = photoUploadQueue;
+  }, [photoUploadQueue]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const orgId = currentOrg?.id ?? null;
+    setPhotoUploadQueue([]);
+    if (!orgId) return;
+    void (async () => {
+      const queue = await loadPhotoUploadQueue(orgId);
+      if (cancelled) return;
+      console.log('[photoUploadQueue] loaded for', orgId, '->', queue.length, 'items');
+      setPhotoUploadQueue(queue);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentOrg?.id]);
+
+  const persistPhotoQueue = useCallback(
+    async (orgId: string, next: PhotoUploadItem[]) => {
+      photoUploadQueueRef.current = next;
+      setPhotoUploadQueue(next);
+      await savePhotoUploadQueue(orgId, next);
+    },
+    [],
+  );
+
+  const enqueuePhotoUpload = useCallback(
+    (playerId: string, localUri: string, playerName?: string) => {
+      const orgId = currentOrg?.id;
+      if (!orgId || !playerId || !localUri) return;
+      // Cloud URLs don't need to be re-uploaded; ignore.
+      if (localUri.startsWith('http://') || localUri.startsWith('https://')) return;
+      const item = buildPhotoUploadItem(orgId, playerId, localUri, playerName);
+      const next = mergeIntoPhotoQueue(photoUploadQueueRef.current, item);
+      void persistPhotoQueue(orgId, next);
+      console.log('[photoUploadQueue] enqueued', playerId, 'queue size:', next.length);
+    },
+    [currentOrg?.id, persistPhotoQueue],
+  );
+
+  const flushPhotoQueueNow = useCallback(async (): Promise<void> => {
+    const orgId = cloudOrgRef.current;
+    if (!orgId) return;
+    if (isPhotoUploadingRef.current) return;
+    const items = photoUploadQueueRef.current;
+    if (items.length === 0) return;
+    isPhotoUploadingRef.current = true;
+    try {
+      console.log('[photoUploadQueue] flushing', items.length, 'items for', orgId);
+      const result = await flushPhotoUploadQueue(orgId, items);
+
+      // For successful uploads, patch the player record's photoUri to the
+      // cloud URL and trigger a roster sync so other devices see the
+      // photo on the next refresh.
+      if (result.uploaded.length > 0) {
+        try {
+          const stored = await AsyncStorage.getItem(playersKey());
+          const current: Player[] = stored ? JSON.parse(stored) : [];
+          const byId = new Map<string, Player>();
+          current.forEach((p) => byId.set(p.id, p));
+
+          const patched: Player[] = [];
+          for (const ok of result.uploaded) {
+            const existing = byId.get(ok.playerId);
+            if (!existing) continue;
+            // Only overwrite if the local copy still references the same
+            // local file (i.e. the volunteer hasn't taken a brand-new
+            // photo since this upload was queued).
+            const updated: Player = { ...existing, photoUri: ok.cloudUrl };
+            byId.set(ok.playerId, updated);
+            patched.push(updated);
+          }
+
+          if (patched.length > 0) {
+            const next = Array.from(byId.values());
+            memoryPlayerCache = next;
+            await AsyncStorage.setItem(playersKey(), JSON.stringify(next));
+            queryClient.setQueryData(['local-players', orgScopeRef.current], next);
+            // Push the now-cloud-URL'd rows to Supabase.
+            for (const p of patched) {
+              enqueueCloudWrite(p);
+            }
+            void flushCloudQueueNow();
+          }
+        } catch (err) {
+          console.warn('[photoUploadQueue] patch-back failed:', err);
+        }
+      }
+
+      // Persist remaining failed items with incremented retry counts.
+      const handled = new Set([...result.uploaded.map((u) => u.itemId)]);
+      const remaining = items
+        .filter((i) => !handled.has(i.id))
+        .map((i) => {
+          const fail = result.failed.find((f) => f.itemId === i.id);
+          return {
+            ...i,
+            retries: i.retries + 1,
+            lastTriedAt: new Date().toISOString(),
+            lastError: fail?.error ?? i.lastError,
+          };
+        });
+      await persistPhotoQueue(orgId, remaining);
+      console.log(
+        '[photoUploadQueue] flush done. uploaded:',
+        result.uploaded.length,
+        'failed:',
+        result.failed.length,
+        'remaining:',
+        remaining.length,
+      );
+    } finally {
+      isPhotoUploadingRef.current = false;
+    }
+  }, [persistPhotoQueue, queryClient, playersKey, enqueueCloudWrite, flushCloudQueueNow]);
+
   // Auto-flush on launch (when org loads) and on network reconnect.
   useEffect(() => {
     const orgId = currentOrg?.id;
     if (!orgId) return;
     void flushCloudQueueNow();
-  }, [currentOrg?.id, flushCloudQueueNow]);
+    void flushPhotoQueueNow();
+  }, [currentOrg?.id, flushCloudQueueNow, flushPhotoQueueNow]);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       const online = state.isConnected ?? true;
       if (online && cloudOrgRef.current) {
-        console.log('[cloudSync] network back online, flushing queue');
+        console.log('[cloudSync] network back online, flushing queues');
         void flushCloudQueueNow();
+        void flushPhotoQueueNow();
       }
     });
     return () => unsubscribe();
-  }, [flushCloudQueueNow]);
+  }, [flushCloudQueueNow, flushPhotoQueueNow]);
 
   // Periodic retry while there is a backlog.
   useEffect(() => {
@@ -882,7 +1145,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     mutationFn: async ({ player }: { spreadsheetId: string; sheetName?: string; player: Omit<Player, 'id'> & { id?: string } }) => {
       const withId: Player = {
         ...(player as Player),
-        id: player.id ?? `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id: player.id ?? randomId('local'),
       };
       return { success: true as const, player: withId };
     },
@@ -948,7 +1211,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       const currentPlayers: Player[] = stored ? JSON.parse(stored) : [];
       const player: Player = {
         ...newPlayer,
-        id: Date.now().toString(),
+        id: randomId(),
       };
       const newPlayers = [...currentPlayers, player];
       await AsyncStorage.setItem(playersKey(), JSON.stringify(newPlayers));
@@ -1063,7 +1326,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
             !!registryKey && verifiedRegistryRef.current.has(registryKey);
           resultPlayers.push({
             ...importedPlayer,
-            id: `imported-${Date.now()}-${index}`,
+            id: randomId('imported'),
             teamName: importedPlayer.teamName ?? '',
             checkedIn: importedPlayer.checkedIn ?? false,
             checkedInAt: importedPlayer.checkedInAt ?? null,
@@ -1360,7 +1623,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       if (orgCode) {
         try {
           console.log('[cloudSync] running final reconcile for org', orgCode);
-          reconcileResult = await runFinalReconcile(orgId, orgCode, dedupePlayers);
+          reconcileResult = await runFinalReconcile(orgId, orgCode, dedupePlayers, mergePlayerRecords);
           if (reconcileResult.mergedTotal > 0) {
             memoryPlayerCache = null;
             try {
@@ -1379,14 +1642,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
       const all = playersRef.current;
       console.log('[cloudSync] force-syncing entire roster:', all.length, 'players');
-      const result = await forcePushAllPlayers(orgId, all);
+      const result = await forcePushAllPlayers(orgId, all, mergePlayerRecords);
 
       // After a force push, also try to drain anything queued.
       const remainingQueue = cloudQueueRef.current;
-      let queueResult: FlushResult = { synced: [], skipped: [], failed: [] };
+      let queueResult: FlushResult = { synced: [], merged: [], failed: [] };
       if (remainingQueue.length > 0) {
-        queueResult = await flushCloudSyncQueue(orgId, remainingQueue);
-        const handled = new Set([...queueResult.synced, ...queueResult.skipped]);
+        queueResult = await flushCloudSyncQueue(orgId, remainingQueue, mergePlayerRecords);
+        const handled = new Set([...queueResult.synced, ...queueResult.merged]);
         const remaining = remainingQueue
           .filter((i) => !handled.has(i.id))
           .map((i) => {
@@ -1405,12 +1668,17 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       setLastCloudSyncedAt(now);
       await saveLastCloudSync(orgId, now);
 
-      const synced = result.synced.length + queueResult.synced.length + (reconcileResult?.pushed ?? 0);
-      const skipped = result.skipped.length + queueResult.skipped.length + (reconcileResult?.skipped ?? 0);
+      const synced =
+        result.synced.length +
+        result.merged.length +
+        queueResult.synced.length +
+        queueResult.merged.length +
+        (reconcileResult?.pushed ?? 0);
+      const skipped = reconcileResult?.skipped ?? 0;
       const failed = result.failed.length + queueResult.failed.length + (reconcileResult?.failed ?? 0);
       setLastCloudSyncResult({
         synced: [...result.synced, ...queueResult.synced],
-        skipped: [...result.skipped, ...queueResult.skipped],
+        merged: [...result.merged, ...queueResult.merged],
         failed: [...result.failed, ...queueResult.failed],
       });
       console.log('[cloudSync] force-sync complete', { synced, skipped, failed, reconcile: reconcileResult });
@@ -1444,7 +1712,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
     let cancelled = false;
     const launch = async () => {
-      const alreadyRanAt = await hasReconcileRun();
+      const alreadyRanAt = await hasReconcileRun(orgId);
       if (alreadyRanAt) {
         console.log('[cloudSync] final reconcile already ran at', alreadyRanAt, '- skipping');
         reconcileLaunchRanRef.current = true;
@@ -1456,7 +1724,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       isCloudSyncingRef.current = true;
       setIsCloudSyncing(true);
       try {
-        const result = await runFinalReconcile(orgId, orgCode, dedupePlayers);
+        const result = await runFinalReconcile(orgId, orgCode, dedupePlayers, mergePlayerRecords);
         if (cancelled) return;
         if (result.mergedTotal > 0) {
           try {
@@ -1487,46 +1755,17 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     };
   }, [currentOrg?.id, currentOrg?.code, queryClient, playersKey]);
 
+  // The club picker is strict: the only valid options are the canonical
+  // clubs in `public.clubs` (or, while the fetch is in flight / offline,
+  // the static fallback that mirrors that seed). We deliberately do NOT
+  // surface clubs from sheet/CSV imports or from existing Player.club
+  // strings — that's exactly what produced the variant-spelling problem
+  // (audit + migration 025). If a name appears in a row but isn't in the
+  // canonical list, it should round-trip back into the picker as "no club
+  // selected" so an admin can clean it up at the source.
   const clubs: Club[] = useMemo(() => {
-    const uniqueClubs = new Map<string, Club>();
-    
-    // 1. Add clubs from CONNECTED metadata
-    if (isConnected && sheetsMetadataQuery.data?.clubs?.length) {
-      sheetsMetadataQuery.data.clubs.forEach(club => {
-        if (club.name && !uniqueClubs.has(club.name)) {
-          uniqueClubs.set(club.name, club);
-        }
-      });
-    }
-    
-    // 2. Add clubs from IMPORTED metadata
-    if (!isConnected && importedClubs.length > 0) {
-      importedClubs.forEach(club => {
-        if (club.name && !uniqueClubs.has(club.name)) {
-          uniqueClubs.set(club.name, club);
-        }
-      });
-    }
-    
-    // 3. Add clubs from player data
-    players.forEach(player => {
-      if (player.club && !uniqueClubs.has(player.club)) {
-        uniqueClubs.set(player.club, {
-          id: player.club.toLowerCase().replace(/\s+/g, '-'),
-          name: player.club,
-        });
-      }
-    });
-    
-    const allClubs = Array.from(uniqueClubs.values()).sort((a, b) => 
-      a.name.localeCompare(b.name)
-    );
-    
-    if (allClubs.length > 0) {
-      return allClubs;
-    }
-    return mockClubs;
-  }, [players, isConnected, sheetsMetadataQuery.data, importedClubs]);
+    return [...canonicalClubs].sort((a, b) => a.name.localeCompare(b.name));
+  }, [canonicalClubs]);
 
   const teams: TeamOption[] = useMemo(() => {
     const uniqueTeams = new Map<string, TeamOption>();
@@ -1906,7 +2145,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
           !!registryKey && verifiedRegistryRef.current.has(registryKey);
         resultPlayers.push({
           ...importedPlayer,
-          id: `imported-${Date.now()}-${index}`,
+          id: randomId('imported'),
           teamName: importedPlayer.teamName ?? '',
           checkedIn: importedPlayer.checkedIn ?? false,
           checkedInAt: importedPlayer.checkedInAt ?? null,
@@ -2184,6 +2423,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     lastCloudSyncResult,
     flushCloudQueueNow,
     forceSyncAllToCloud,
+    enqueuePhotoUpload,
+    flushPhotoQueueNow,
+    photoUploadPendingCount: photoUploadQueue.length,
   }), [
     players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
     updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
@@ -2201,6 +2443,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     isPreviouslyAgeVerified, verifiedRegistry,
     cloudQueue, isCloudSyncing, lastCloudSyncedAt, lastCloudSyncResult,
     flushCloudQueueNow, forceSyncAllToCloud,
+    enqueuePhotoUpload, flushPhotoQueueNow, photoUploadQueue.length,
   ]);
 });
 

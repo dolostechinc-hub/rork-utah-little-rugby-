@@ -1,11 +1,24 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 import { fetchRoster } from './rosterSync';
-import { flushCloudSyncQueue, type CloudSyncItem } from './cloudSyncQueue';
+import {
+  flushCloudSyncQueue,
+  type CloudSyncItem,
+  type PlayerMergeFn,
+} from './cloudSyncQueue';
 import type { Player } from '@/types';
 
 const PLAYERS_KEY_PREFIX = 'registration_players:';
-const RECONCILE_FLAG_KEY = 'final_reconcile_v2_done';
+// Per-org reconcile flag. Audit Medium #1: the previous flag was global, so
+// once any org on the device ran reconcile, every other org silently
+// skipped its own sweep (and never pushed older local caches up). Scoping
+// the flag by org id makes this work for multi-org devices.
+const RECONCILE_FLAG_KEY_PREFIX = 'final_reconcile_v2_done';
+const LEGACY_GLOBAL_RECONCILE_FLAG_KEY = 'final_reconcile_v2_done';
+
+function reconcileFlagKey(orgId: string): string {
+  return `${RECONCILE_FLAG_KEY_PREFIX}:${orgId}`;
+}
 
 export interface ReconcileResult {
   ok: boolean;
@@ -116,6 +129,7 @@ export async function runFinalReconcile(
   canonicalOrgId: string,
   orgCode: string,
   dedupePlayers: DedupeFn,
+  mergeFn: PlayerMergeFn,
 ): Promise<ReconcileResult> {
   console.log('[finalReconcile] starting for org', orgCode, '->', canonicalOrgId);
 
@@ -145,9 +159,9 @@ export async function runFinalReconcile(
 
   if (items.length > 0) {
     try {
-      const result = await flushCloudSyncQueue(canonicalOrgId, items);
-      pushed = result.synced.length;
-      skipped = result.skipped.length;
+      const result = await flushCloudSyncQueue(canonicalOrgId, items, mergeFn);
+      pushed = result.synced.length + result.merged.length;
+      skipped = 0;
       failed = result.failed.length;
       if (result.failed.length > 0) {
         lastError = result.failed[0]?.error;
@@ -168,7 +182,7 @@ export async function runFinalReconcile(
   }
 
   try {
-    await AsyncStorage.setItem(RECONCILE_FLAG_KEY, now);
+    await AsyncStorage.setItem(reconcileFlagKey(canonicalOrgId), now);
   } catch (err) {
     console.warn('[finalReconcile] failed to set reconcile flag:', err);
   }
@@ -199,18 +213,47 @@ export async function runFinalReconcile(
   };
 }
 
-export async function hasReconcileRun(): Promise<string | null> {
+/**
+ * Returns the ISO timestamp the reconcile last ran for `orgId`, or null
+ * if it hasn't run for this org yet on this device.
+ *
+ * Honors the legacy global flag from older app versions: if the global
+ * flag is set but no per-org flag exists, we treat it as "this org has
+ * already been reconciled". That keeps the first launch after upgrade from
+ * re-running reconcile on the org the device was last using. Other orgs
+ * the device joins will run reconcile fresh, which is the audit fix.
+ */
+export async function hasReconcileRun(orgId: string): Promise<string | null> {
   try {
-    return (await AsyncStorage.getItem(RECONCILE_FLAG_KEY)) ?? null;
+    const perOrg = await AsyncStorage.getItem(reconcileFlagKey(orgId));
+    if (perOrg) return perOrg;
+    const legacy = await AsyncStorage.getItem(LEGACY_GLOBAL_RECONCILE_FLAG_KEY);
+    return legacy ?? null;
   } catch {
     return null;
   }
 }
 
-export async function clearReconcileFlag(): Promise<void> {
+export async function clearReconcileFlag(orgId: string): Promise<void> {
   try {
-    await AsyncStorage.removeItem(RECONCILE_FLAG_KEY);
+    await AsyncStorage.removeItem(reconcileFlagKey(orgId));
   } catch (err) {
     console.warn('[finalReconcile] failed to clear flag:', err);
+  }
+}
+
+export async function clearAllReconcileFlags(): Promise<void> {
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const targets = keys.filter(
+      (k) =>
+        k === LEGACY_GLOBAL_RECONCILE_FLAG_KEY ||
+        k.startsWith(`${RECONCILE_FLAG_KEY_PREFIX}:`),
+    );
+    if (targets.length > 0) {
+      await AsyncStorage.multiRemove(targets);
+    }
+  } catch (err) {
+    console.warn('[finalReconcile] failed to clear all flags:', err);
   }
 }

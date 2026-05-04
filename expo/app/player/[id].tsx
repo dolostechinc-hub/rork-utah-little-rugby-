@@ -31,8 +31,6 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useRegistration, usePlayer } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
-import { useOrganization } from '@/contexts/OrganizationContext';
-import { uploadPlayerPhoto } from '@/lib/supabase';
 import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
 import WeightRestrictionModal from '@/components/WeightRestrictionModal';
@@ -49,9 +47,16 @@ export default function PlayerDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const player = usePlayer(id || '');
-  const { updatePlayer, isUpdating, teams, isPreviouslyAgeVerified, showTeamAssignment } = useRegistration();
+  const {
+    updatePlayer,
+    isUpdating,
+    teams,
+    isPreviouslyAgeVerified,
+    showTeamAssignment,
+    enqueuePhotoUpload,
+    flushPhotoQueueNow,
+  } = useRegistration();
   const { canEdit } = useAuth();
-  const { currentOrg } = useOrganization();
 
   const scrollRef = useRef<ScrollView | null>(null);
   const weightInputRef = useRef<TextInput | null>(null);
@@ -303,51 +308,22 @@ export default function PlayerDetailScreen() {
 
     console.log('Saving player check-in:', player.id);
 
-    let finalPhotoUri = photoUri;
-    let uploadErrorMessage: string | null = null;
-
-    if (photoUri && !photoUri.startsWith('http')) {
-      console.log('Uploading photo to cloud storage...');
-      setIsUploading(true);
-
-      try {
-        const uploadedUrl = await uploadPlayerPhoto(
-          player.id,
-          photoUri,
-          currentOrg?.id ?? 'utah-little-rugby',
-          3,
-          `${player.firstName ?? ''} ${player.lastName ?? ''}`.trim()
-        );
-        console.log('Photo uploaded to cloud successfully:', uploadedUrl);
-        finalPhotoUri = uploadedUrl;
-        setPhotoUri(uploadedUrl);
-      } catch (uploadError) {
-        uploadErrorMessage =
-          uploadError instanceof Error ? uploadError.message : String(uploadError);
-        console.error('Photo cloud upload error:', uploadError);
-      } finally {
-        setIsUploading(false);
-      }
-    }
-
-    if (uploadErrorMessage) {
-      Alert.alert(
-        'Photo Upload Failed',
-        'Could not upload the photo to cloud storage. Please check your internet connection and try again.\n\nDetails:\n' +
-          uploadErrorMessage,
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
+    // Audit Medium #2: never block the local save on the photo upload.
+    // The volunteer needs the check-in to commit even on flaky wifi at a
+    // pitch. We save the player with whatever URI the user picked (local
+    // file:// or already-uploaded https://) and hand the actual upload
+    // off to the photo upload queue. When the upload eventually succeeds,
+    // RegistrationContext patches the player's photoUri to the cloud URL
+    // and re-syncs through the regular cloud sync queue.
     const checkedIn = true;
     const finalAgeGroup = playUpAgeGroup || calculatedAgeGroup || player.ageGroup;
+    const isLocalPhoto = !!photoUri && !photoUri.startsWith('http');
 
     try {
       await updatePlayer({
         ...player,
         isAgeVerified,
-        photoUri: finalPhotoUri,
+        photoUri,
         weight: trimmedWeight,
         checkedIn,
         checkedInAt: new Date().toISOString(),
@@ -356,7 +332,25 @@ export default function PlayerDetailScreen() {
         calculatedAgeGroup: calculatedAgeGroup || undefined,
       });
 
-      console.log('Player check-in saved and synced successfully');
+      if (isLocalPhoto && photoUri) {
+        try {
+          enqueuePhotoUpload(
+            player.id,
+            photoUri,
+            `${player.firstName ?? ''} ${player.lastName ?? ''}`.trim(),
+          );
+          // Fire-and-forget: try the upload right now while the network
+          // is fresh; if it fails we'll retry on launch / reconnect.
+          setIsUploading(true);
+          void flushPhotoQueueNow().finally(() => {
+            setIsUploading(false);
+          });
+        } catch (queueErr) {
+          console.warn('Failed to enqueue photo upload (will retry on launch):', queueErr);
+        }
+      }
+
+      console.log('Player check-in saved locally; photo upload queued if needed');
 
       if (Platform.OS !== 'web') {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
