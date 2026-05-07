@@ -155,7 +155,17 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       const stored = await AsyncStorage.getItem(ORG_STORAGE_KEY);
       if (stored) {
         console.log('Found stored org data');
-        return JSON.parse(stored) as OrgData;
+        const parsed = JSON.parse(stored) as OrgData;
+        // Backfill isActive on orgs persisted before migration 040 / type change.
+        // Treat anything not explicitly false as active so old caches don't
+        // suddenly look inactive after upgrade.
+        if (Array.isArray(parsed.organizations)) {
+          parsed.organizations = parsed.organizations.map((o) => ({
+            ...o,
+            isActive: typeof o.isActive === 'boolean' ? o.isActive : true,
+          }));
+        }
+        return parsed;
       }
       console.log('No stored org data, using defaults');
       return DEFAULT_ORG_DATA;
@@ -434,6 +444,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       createdAt: new Date().toISOString(),
       ownerId: ownerUUID,
       expiresAt: expiresAt.toISOString(),
+      isActive: true,
     };
 
     const ownerMember: OrgMember = {
@@ -537,6 +548,56 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     await saveData(newData);
   }, [orgData, saveData]);
 
+  const setOrgActive = useCallback(
+    async (
+      orgId: string,
+      isActive: boolean,
+    ): Promise<{ success: boolean; message: string }> => {
+      console.log('[setOrgActive]', { orgId, isActive });
+
+      const existing = orgData.organizations.find((o) => o.id === orgId);
+      if (!existing) {
+        return { success: false, message: 'Organization not found on this device.' };
+      }
+
+      // Source of truth is Supabase. Update there first; fail fast if the
+      // remote write doesn't land so we don't drift from the cloud.
+      try {
+        const { error } = await supabase
+          .from('organizations')
+          .update({ is_active: isActive })
+          .eq('id', orgId);
+        if (error) {
+          console.warn('[setOrgActive] supabase update failed:', error.message);
+          return {
+            success: false,
+            message: `Cloud update failed: ${error.message}`,
+          };
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn('[setOrgActive] supabase update threw:', msg);
+        return { success: false, message: `Network error: ${msg}` };
+      }
+
+      const newData: OrgData = {
+        ...orgData,
+        organizations: orgData.organizations.map((o) =>
+          o.id === orgId ? { ...o, isActive } : o,
+        ),
+      };
+      await saveData(newData);
+
+      return {
+        success: true,
+        message: isActive
+          ? `Marked "${existing.name}" active.`
+          : `Marked "${existing.name}" inactive.`,
+      };
+    },
+    [orgData, saveData],
+  );
+
   const joinOrgByCode = useCallback(async (code: string, userId: string, userName: string, email: string): Promise<Organization | null> => {
     console.log('Joining org by code:', code);
     const normalizedCode = code.toUpperCase().trim();
@@ -623,6 +684,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             createdAt: supabaseOrg.created_at,
             ownerId: supabaseOrg.owner_id,
             expiresAt: supabaseOrg.expires_at || fallbackExpiry.toISOString(),
+            isActive: supabaseOrg.is_active ?? true,
           };
         } else {
           console.log('No organization found in Supabase with code:', normalizedCode);
@@ -1340,6 +1402,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     selectEvent,
     createOrg,
     updateOrg,
+    setOrgActive,
     joinOrgByCode,
     pushOrgToCloud,
     createTeam,
@@ -1377,7 +1440,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     orgData, currentOrg, currentEvent, currentOrgTeams, currentOrgEvents,
     currentEventTeams, currentEventVerifications, orgDataQuery.isLoading,
     isInitialized, isSaving, isOnline, offlineQueue.length, unsyncedOrgIds,
-    selectOrg, selectEvent, createOrg, updateOrg, joinOrgByCode, pushOrgToCloud,
+    selectOrg, selectEvent, createOrg, updateOrg, setOrgActive, joinOrgByCode, pushOrgToCloud,
     createTeam, createTeamsBulk, clearOrgTeams, getOrgByName,
     shouldOverwriteOrgData, importTeamsWithOrgCheck, updateTeam, deleteTeam,
     deleteOrg, leaveOrg, createEvent, updateEvent, deleteEvent, addTeamToEvent,

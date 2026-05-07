@@ -1,5 +1,6 @@
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Linking from 'expo-linking';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   EditorSession,
@@ -12,6 +13,8 @@ import {
   revokeEditorPin as revokeEditorPinRPC,
   subscribeEditorSession,
 } from '@/lib/editorSession';
+import { supabase } from '@/lib/supabase';
+import { isAppAdmin as isAppAdminRPC } from '@/lib/appAdmin';
 
 const ADMIN_PIN_KEY = 'admin_pin';
 const AUTH_STATE_KEY = 'auth_state';
@@ -36,6 +39,144 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   const [eventLockedForEditors, setEventLockedForEditorsState] = useState<boolean>(false);
   const [isOrgOwner, setIsOrgOwnerState] = useState<boolean>(false);
   const isOrgOwnerRef = useRef<boolean>(false);
+
+  // ---------------------------------------------------------------------------
+  // Supabase auth-backed identity (added in migration 032).
+  //
+  // `authUserId` and `authEmail` come from supabase.auth.getSession() and
+  // stay in sync via onAuthStateChange. `isAppAdmin` is fetched from the
+  // server whenever auth state changes (server-side check, never trusted
+  // from the client).
+  // ---------------------------------------------------------------------------
+  const [authUserId, setAuthUserId] = useState<string | null>(null);
+  const [authEmail, setAuthEmail] = useState<string | null>(null);
+  const [isAppAdmin, setIsAppAdmin] = useState<boolean>(false);
+  const [isAuthLoaded, setIsAuthLoaded] = useState<boolean>(false);
+  const [isOrgAdminViaAuth, setIsOrgAdminViaAuthState] = useState<boolean>(false);
+  // Currently a no-op / placeholder. RegistrationContext flips this true
+  // when `auth.uid()` matches an org_members row with role admin/owner
+  // for the active org. Defaulting to false keeps the existing behaviour
+  // unchanged for everyone who's not signed in.
+  const setIsOrgAdminViaAuth = useCallback((v: boolean) => {
+    setIsOrgAdminViaAuthState((prev) => (prev === v ? prev : v));
+  }, []);
+
+  const refreshAppAdminStatus = useCallback(async () => {
+    try {
+      const yes = await isAppAdminRPC();
+      setIsAppAdmin(yes);
+    } catch (err) {
+      console.warn('[auth] isAppAdmin check failed:', err);
+      setIsAppAdmin(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const applySession = async (
+      session: { user: { id: string; email?: string | null } } | null,
+    ) => {
+      if (cancelled) return;
+      const uid = session?.user?.id ?? null;
+      const email = session?.user?.email ?? null;
+      setAuthUserId(uid);
+      setAuthEmail(email);
+      if (uid) {
+        await refreshAppAdminStatus();
+      } else {
+        setIsAppAdmin(false);
+      }
+      setIsAuthLoaded(true);
+    };
+
+    void supabase.auth.getSession().then(({ data }) => applySession(data?.session ?? null));
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[auth] supabase auth event:', event);
+      void applySession(session);
+    });
+
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
+  }, [refreshAppAdminStatus]);
+
+  const signInWithEmail = useCallback(async (email: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed || !trimmed.includes('@')) {
+      return { ok: false, error: 'Enter a valid email address.' };
+    }
+    try {
+      const redirectTo = Linking.createURL('/auth-callback');
+      // Logged so you can confirm in the dev terminal which redirect URL
+      // got sent to Supabase. The URL must be whitelisted under
+      // Authentication → URL Configuration → Redirect URLs in the
+      // Supabase dashboard, otherwise Supabase silently substitutes the
+      // project's Site URL (e.g. http://localhost:3000) and the magic
+      // link will not return you to the app.
+      console.log('[auth] sending magic link', { email: trimmed, redirectTo });
+      const { error } = await supabase.auth.signInWithOtp({
+        email: trimmed,
+        options: {
+          emailRedirectTo: redirectTo,
+          shouldCreateUser: true,
+        },
+      });
+      if (error) {
+        return { ok: false, error: error.message };
+      }
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: (err as Error).message || 'Could not send magic link' };
+    }
+  }, []);
+
+  const verifyEmailOtp = useCallback(
+    async (email: string, token: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+      const trimmedEmail = email.trim().toLowerCase();
+      // Supabase's email-OTP length is configurable per project (default 6,
+      // many projects use 8). Accept anything between 4 and 10 digits and
+      // let the server reject if the value is wrong.
+      const trimmedToken = token.replace(/\D/g, '').slice(0, 10);
+      if (!trimmedEmail.includes('@')) {
+        return { ok: false, error: 'Enter a valid email address.' };
+      }
+      if (trimmedToken.length < 4) {
+        return { ok: false, error: 'Enter the code from the email.' };
+      }
+      try {
+        // type 'email' matches what Supabase issues for magic-link / OTP
+        // emails. Successful verification establishes a session in the
+        // local Supabase client, which our onAuthStateChange listener
+        // picks up and uses to refresh authUserId / isAppAdmin.
+        const { error } = await supabase.auth.verifyOtp({
+          email: trimmedEmail,
+          token: trimmedToken,
+          type: 'email',
+        });
+        if (error) {
+          return { ok: false, error: error.message };
+        }
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: (err as Error).message || 'Could not verify code' };
+      }
+    },
+    [],
+  );
+
+  const signOut = useCallback(async (): Promise<void> => {
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('[auth] signOut failed:', err);
+    }
+    setAuthUserId(null);
+    setAuthEmail(null);
+    setIsAppAdmin(false);
+  }, []);
 
   useEffect(() => {
     const unsub = subscribeEditorSession((s) => {
@@ -289,7 +430,24 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     }
   }, [isOrgOwner, role]);
 
-  const isAdmin = role === 'admin' && isOrgOwner;
+  // After migration 032, admin can come from three independent sources:
+  //   1. Signed in + the auth user is in `app_admins` (league admin).
+  //   2. Signed in + auth user is an admin/owner of the current org via
+  //      org_members.auth_uid (set by RegistrationContext).
+  //   3. The legacy device-bound owner check used by every pre-auth org
+  //      whose creator hasn't signed in yet.
+  // The PIN-based `role === 'admin'` flow is still required for path 3
+  // (it's how the device-owner unlocks admin UI today). For paths 1 & 2,
+  // a real auth.uid() is sufficient and we don't require the PIN at all.
+  //
+  // In development builds (__DEV__ === true) we additionally force-grant
+  // admin so the maintainer can navigate the whole app without going
+  // through the email sign-in flow on every reinstall. Metro/Expo set
+  // __DEV__ to false in production / App Store / TestFlight builds, so
+  // this has zero effect on shipped binaries.
+  const isAuthAdmin = !!authUserId && (isAppAdmin || isOrgAdminViaAuth);
+  const isLegacyAdmin = role === 'admin' && isOrgOwner;
+  const isAdmin = __DEV__ || isAuthAdmin || isLegacyAdmin;
   const isEditor = role === 'editor' && !!getEditorSession();
   const isViewer = !isAdmin && !isEditor;
   // Editors lose write access when the admin flips the event to view-only.
@@ -299,6 +457,8 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
   return {
     role,
     isAdmin,
+    isAuthAdmin,
+    isLegacyAdmin,
     isOrgOwner,
     setIsOrgOwner,
     grantAdminToOwner,
@@ -318,5 +478,15 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
     revalidateEditorSession,
     eventLockedForEditors,
     setEventLockedForEditors,
+    // Auth-backed identity (migration 032)
+    authUserId,
+    authEmail,
+    isAppAdmin,
+    isAuthLoaded,
+    setIsOrgAdminViaAuth,
+    refreshAppAdminStatus,
+    signInWithEmail,
+    verifyEmailOtp,
+    signOut,
   };
 });

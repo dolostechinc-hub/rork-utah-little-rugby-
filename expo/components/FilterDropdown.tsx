@@ -17,6 +17,10 @@ interface FilterDropdownProps {
   options: { id: string; name: string }[];
   onSelect: (value: string | null) => void;
   placeholder?: string;
+  // Override the label colour. Used on screens that render the dropdown
+  // on top of a dark / branded background (e.g. the check-in page) where
+  // the default `textSecondary` grey is unreadable.
+  labelColor?: string;
 }
 
 export default function FilterDropdown({
@@ -25,12 +29,13 @@ export default function FilterDropdown({
   options,
   onSelect,
   placeholder = 'All',
+  labelColor,
 }: FilterDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, labelColor ? { color: labelColor } : null]}>{label}</Text>
       <TouchableOpacity
         style={styles.dropdown}
         onPress={() => setIsOpen(true)}

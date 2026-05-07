@@ -1,10 +1,41 @@
 import { Club, AgeGroup, Division, Player } from '@/types';
 
+// Canonical Utah Little Rugby clubs. Mirrors the seed list in
+// supabase/migrations/025_clubs_table.sql. Used as an offline fallback
+// when fetchClubs() can't reach Supabase; the app prefers the live
+// table when available so adding/renaming a club doesn't require an
+// app rebuild.
 export const clubs: Club[] = [
-  { id: '1', name: 'Northside Eagles' },
-  { id: '2', name: 'Southside Tigers' },
-  { id: '3', name: 'Eastside Warriors' },
-  { id: '4', name: 'Westside Wolves' },
+  { id: 'fallback-american-fork',              name: 'American Fork' },
+  { id: 'fallback-brighton',                   name: 'Brighton' },
+  { id: 'fallback-cache-valley',               name: 'Cache Valley' },
+  { id: 'fallback-cavemen-rugby',              name: 'Cavemen Rugby' },
+  { id: 'fallback-eagle-mountain',             name: 'Eagle Mountain' },
+  { id: 'fallback-east',                       name: 'East' },
+  { id: 'fallback-herriman',                   name: 'Herriman' },
+  { id: 'fallback-highland',                   name: 'Highland' },
+  { id: 'fallback-kearns',                     name: 'Kearns' },
+  { id: 'fallback-lca',                        name: 'LCA' },
+  { id: 'fallback-majestics',                  name: 'Majestics' },
+  { id: 'fallback-mountain-ridge',             name: 'Mountain Ridge' },
+  { id: 'fallback-mountain-valley-powerhouse', name: 'Mountain Valley Powerhouse' },
+  { id: 'fallback-mountain-view',              name: 'Mountain View' },
+  { id: 'fallback-olympus',                    name: 'Olympus' },
+  { id: 'fallback-orem',                       name: 'Orem' },
+  { id: 'fallback-pleasant-grove',             name: 'Pleasant Grove' },
+  { id: 'fallback-provo-steelers',             name: 'Provo Steelers' },
+  { id: 'fallback-richfield-broncos',          name: 'Richfield Broncos' },
+  { id: 'fallback-salt-lake-valley-rhinos',    name: 'Salt Lake Valley Rhinos' },
+  { id: 'fallback-skyline',                    name: 'Skyline' },
+  { id: 'fallback-south-davis',                name: 'South Davis' },
+  { id: 'fallback-springville',                name: 'Springville' },
+  { id: 'fallback-tooele',                     name: 'Tooele' },
+  { id: 'fallback-united',                     name: 'United' },
+  { id: 'fallback-war-frog',                   name: 'War Frog' },
+  { id: 'fallback-wasatch',                    name: 'Wasatch' },
+  { id: 'fallback-west-valley-warriors',       name: 'West Valley Warriors' },
+  { id: 'fallback-westlake-drua',              name: 'Westlake Drua' },
+  { id: 'fallback-westside-lions',             name: 'Westside Lions' },
 ];
 
 export const ageGroups: AgeGroup[] = [

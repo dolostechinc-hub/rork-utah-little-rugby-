@@ -1,7 +1,10 @@
+// Contact / weight rule. "play_up" used to live here as well, but it's
+// orthogonal (a kid can play up AND be in the open division), so it
+// moved to its own boolean `playsUp` on Player. Migration 046 backfilled
+// existing rows.
 export type RestrictionStatus = 
   | 'none'
   | 'penny_player'
-  | 'play_up'
   | 'open_division';
 
 export interface Player {
@@ -21,6 +24,9 @@ export interface Player {
   checkedIn: boolean;
   checkedInAt: string | null;
   restrictionStatus?: RestrictionStatus;
+  // Coach-elected age-bracket bump (typically one bracket up). Independent
+  // of restrictionStatus -- a player can play up AND be in open division.
+  playsUp?: boolean;
   calculatedAgeGroup?: string;
 }
 
@@ -41,11 +47,14 @@ export interface Division {
   name: string;
 }
 
+export type CheckInStatusFilter = 'pending' | 'checkedIn';
+
 export interface RegistrationFilters {
   club: string | null;
   ageGroup: string | null;
   division: string | null;
   teamName?: string | null;
+  status?: CheckInStatusFilter | null;
 }
 
 export type UserOrgRole = 'owner' | 'admin' | 'coach' | 'volunteer' | 'viewer';
@@ -59,6 +68,9 @@ export interface Organization {
   createdAt: string;
   ownerId: string;
   expiresAt: string;
+  // is_active was added in migration 040. Treat undefined/null as true so
+  // pre-040 orgs read from device cache before sync still appear as active.
+  isActive: boolean;
 }
 
 export interface OrgMember {

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
-import { playerToRow } from './rosterSync';
+import { playerToRow, rowToPlayer, type RosterPlayerRow } from './rosterSync';
 import type { Player } from '@/types';
 
 export interface CloudSyncItem {
@@ -8,6 +8,10 @@ export interface CloudSyncItem {
   orgId: string;
   playerId: string;
   player: Player;
+  // Monotonic local timestamp the client controls. Compared against
+  // `roster_players.client_updated_at` (also client-controlled) to decide
+  // whether the local edit is newer than the remote copy. We never compare
+  // against `updated_at` because the trigger rewrites it on every insert.
   lastEditedAt: string;
   retries: number;
   lastTriedAt?: string;
@@ -15,8 +19,12 @@ export interface CloudSyncItem {
 }
 
 export interface FlushResult {
+  // Successfully written exactly as queued.
   synced: string[];
-  skipped: string[];
+  // Remote was strictly newer per client_updated_at: the queued local row
+  // was merged with the remote row field-by-field via `mergeFn` and the
+  // merged result was written. The queue item is considered handled.
+  merged: string[];
   failed: { itemId: string; playerId: string; error: string }[];
 }
 
@@ -110,80 +118,122 @@ export function mergeIntoQueue(
   return queue;
 }
 
-async function fetchRemoteUpdatedAtMap(
+interface RemoteSnapshot {
+  player: Player;
+  clientUpdatedAt: string | null;
+}
+
+async function fetchRemoteSnapshots(
   orgId: string,
   playerIds: string[],
-): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+): Promise<Map<string, RemoteSnapshot>> {
+  const out = new Map<string, RemoteSnapshot>();
   if (playerIds.length === 0) return out;
   const CHUNK = 200;
   for (let i = 0; i < playerIds.length; i += CHUNK) {
     const slice = playerIds.slice(i, i + CHUNK);
+    // We need the full row so we can do a per-field merge when remote is
+    // newer. Pulling the whole row in 200-id chunks keeps the request
+    // small enough to stay within Supabase's row-limit defaults.
     const { data, error } = await supabase
       .from('roster_players')
-      .select('id, updated_at')
+      .select('*')
       .eq('org_id', orgId)
       .in('id', slice);
     if (error) {
-      console.warn('[cloudSyncQueue] fetchRemoteUpdatedAtMap chunk failed:', error.message);
+      console.warn('[cloudSyncQueue] fetchRemoteSnapshots chunk failed:', error.message);
       continue;
     }
-    for (const row of (data ?? []) as { id: string; updated_at: string | null }[]) {
-      if (row.id && row.updated_at) out.set(row.id, row.updated_at);
+    for (const row of (data ?? []) as RosterPlayerRow[]) {
+      if (!row?.id) continue;
+      out.set(row.id, {
+        player: rowToPlayer(row),
+        clientUpdatedAt: row.client_updated_at ?? row.updated_at ?? null,
+      });
     }
   }
   return out;
 }
 
+export type PlayerMergeFn = (local: Player, remote: Player) => Player;
+
 /**
  * Try to push every queue item to Supabase using newest-wins semantics.
- * Returns ids of items that succeeded, were skipped (remote newer), and failed.
+ *
+ * For each item:
+ *   - If no remote row exists, push the local row as-is.
+ *   - If the local edit is newer (per client_updated_at), push the local row.
+ *   - If the remote row is newer, merge per-field via `mergeFn` and push the
+ *     merged result. The queue item is then reported in `merged` so the
+ *     caller can drop it from the queue without losing local fields like
+ *     check-in / photo / weight that the remote row didn't have.
  */
 export async function flushCloudSyncQueue(
   orgId: string,
   items: CloudSyncItem[],
+  mergeFn: PlayerMergeFn,
   updatedBy?: string,
 ): Promise<FlushResult> {
-  const result: FlushResult = { synced: [], skipped: [], failed: [] };
+  const result: FlushResult = { synced: [], merged: [], failed: [] };
   if (!orgId || items.length === 0) return result;
 
   const playerIds = Array.from(new Set(items.map((i) => i.playerId)));
-  let remoteMap = new Map<string, string>();
+  let remoteMap = new Map<string, RemoteSnapshot>();
   try {
-    remoteMap = await fetchRemoteUpdatedAtMap(orgId, playerIds);
+    remoteMap = await fetchRemoteSnapshots(orgId, playerIds);
   } catch (err) {
     console.warn(
-      '[cloudSyncQueue] fetchRemoteUpdatedAtMap failed, will push without comparing:',
+      '[cloudSyncQueue] fetchRemoteSnapshots failed, will push without comparing:',
       err,
     );
   }
 
   for (const item of items) {
-    const remoteUpdatedAt = remoteMap.get(item.playerId);
+    const remote = remoteMap.get(item.playerId);
     const localTs = Date.parse(item.lastEditedAt) || 0;
-    const remoteTs = remoteUpdatedAt ? Date.parse(remoteUpdatedAt) || 0 : 0;
-    if (remoteUpdatedAt && remoteTs > localTs) {
-      console.log(
-        '[cloudSyncQueue] skipping older local edit for',
-        item.playerId,
-        'local=',
-        item.lastEditedAt,
-        'remote=',
-        remoteUpdatedAt,
-      );
-      result.skipped.push(item.id);
-      continue;
+    const remoteTs = remote?.clientUpdatedAt
+      ? Date.parse(remote.clientUpdatedAt) || 0
+      : 0;
+
+    let toPush: Player = item.player;
+    let kind: 'synced' | 'merged' = 'synced';
+
+    if (remote && remoteTs > localTs) {
+      // Remote is newer per client clock. Merge field-by-field so we don't
+      // throw away local-only data (e.g. a freshly captured photo or
+      // weight that hasn't reached the server yet) just because someone
+      // else made an edit later.
+      try {
+        // Argument order matches mergePlayerRecords(local, remote): empty
+        // fields on `local` fall back to `remote`, but `local` wins when
+        // both are populated. We pass remote first to preserve newer
+        // strings while still letting any local-only fields survive.
+        toPush = mergeFn(remote.player, item.player);
+        kind = 'merged';
+        console.log(
+          '[cloudSyncQueue] remote newer, merging instead of skipping for',
+          item.playerId,
+          'local=',
+          item.lastEditedAt,
+          'remoteClient=',
+          remote.clientUpdatedAt,
+        );
+      } catch (mergeErr) {
+        console.warn('[cloudSyncQueue] mergeFn threw, falling back to local push:', mergeErr);
+      }
     }
 
-    const row = {
-      ...playerToRow(orgId, item.player, updatedBy),
-      updated_at: item.lastEditedAt,
-    };
+    // Always stamp client_updated_at to "now" on the row we actually
+    // write. That way the next device that reads the row sees that we
+    // (the merger) are the latest authoritative writer; if we kept the
+    // remote's older timestamp, we'd risk an infinite merge loop.
+    const writeStamp = new Date().toISOString();
+    const row = playerToRow(orgId, toPush, updatedBy, writeStamp);
 
     try {
       const { error } = await supabase
         .from('roster_players')
-        .upsert(row, { onConflict: 'id' });
+        .upsert(row, { onConflict: 'org_id,id' });
       if (error) {
         console.warn(
           '[cloudSyncQueue] upsert failed for',
@@ -197,7 +247,8 @@ export async function flushCloudSyncQueue(
         });
         continue;
       }
-      result.synced.push(item.id);
+      if (kind === 'synced') result.synced.push(item.id);
+      else result.merged.push(item.id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn('[cloudSyncQueue] upsert threw for', item.playerId, message);
@@ -213,17 +264,19 @@ export async function flushCloudSyncQueue(
 }
 
 /**
- * Push every player in the local roster to Supabase, applying newest-wins.
- * Used by the "Force Sync Now" button so a volunteer can flush everything
- * even if the queue lost track of a change.
+ * Push every player in the local roster to Supabase, applying the same
+ * merge semantics as the regular queue flush. Used by the "Force Sync Now"
+ * button so a volunteer can flush everything even if the queue lost track
+ * of a change.
  */
 export async function forcePushAllPlayers(
   orgId: string,
   players: Player[],
+  mergeFn: PlayerMergeFn,
   updatedBy?: string,
 ): Promise<FlushResult> {
   const items: CloudSyncItem[] = players.map((p) =>
     buildItem(orgId, p, new Date().toISOString()),
   );
-  return flushCloudSyncQueue(orgId, items, updatedBy);
+  return flushCloudSyncQueue(orgId, items, mergeFn, updatedBy);
 }

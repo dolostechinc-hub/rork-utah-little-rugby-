@@ -9,7 +9,7 @@ import {
   RefreshControl,
   Keyboard,
 } from 'react-native';
-import { Player } from '@/types';
+import { Player, CheckInStatusFilter } from '@/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Search } from 'lucide-react-native';
 import { useRegistration } from '@/contexts/RegistrationContext';
@@ -19,6 +19,14 @@ import StatsBar from '@/components/StatsBar';
 import CloudSyncBanner from '@/components/CloudSyncBanner';
 import OrgMovedBanner from '@/components/OrgMovedBanner';
 import Colors from '@/constants/colors';
+
+// FilterDropdown identifies its rows by `id` and surfaces `name` to the
+// user. The names here are matched against in the onSelect handler to
+// decide which CheckInStatusFilter value to store.
+const STATUS_FILTER_OPTIONS = [
+  { id: 'pending', name: 'Pending' },
+  { id: 'checkedIn', name: 'Checked In' },
+];
 
 export default function CheckInScreen() {
   const insets = useSafeAreaInsets();
@@ -114,6 +122,7 @@ export default function CheckInScreen() {
             options={clubs}
             onSelect={(value) => setFilters({ ...filters, club: value })}
             placeholder="All Clubs"
+            labelColor={Colors.white}
           />
           <View style={styles.filterSpacer} />
           <FilterDropdown
@@ -122,6 +131,7 @@ export default function CheckInScreen() {
             options={ageGroups}
             onSelect={(value) => setFilters({ ...filters, ageGroup: value })}
             placeholder="All Ages"
+            labelColor={Colors.white}
           />
           <View style={styles.filterSpacer} />
           <FilterDropdown
@@ -130,20 +140,43 @@ export default function CheckInScreen() {
             options={divisions}
             onSelect={(value) => setFilters({ ...filters, division: value })}
             placeholder="All"
+            labelColor={Colors.white}
           />
         </View>
 
-        {teams.length > 0 && (
-          <View style={styles.filterRow}>
-            <FilterDropdown
-              label={`Team${teamNames.length > 0 ? ` (${teamNames.length})` : ''}`}
-              value={filters.teamName || null}
-              options={teamNames}
-              onSelect={(value) => setFilters({ ...filters, teamName: value })}
-              placeholder={teamNames.length === 0 ? 'No teams match' : 'All Teams'}
-            />
-          </View>
-        )}
+        <View style={styles.filterRow}>
+          {teams.length > 0 && (
+            <>
+              <FilterDropdown
+                label="Team"
+                value={filters.teamName || null}
+                options={teamNames}
+                onSelect={(value) => setFilters({ ...filters, teamName: value })}
+                placeholder={teamNames.length === 0 ? 'No teams match' : 'All Teams'}
+                labelColor={Colors.white}
+              />
+              <View style={styles.filterSpacer} />
+            </>
+          )}
+          <FilterDropdown
+            label="Status"
+            value={
+              filters.status === 'checkedIn'
+                ? 'Checked In'
+                : filters.status === 'pending'
+                ? 'Pending'
+                : null
+            }
+            options={STATUS_FILTER_OPTIONS}
+            onSelect={(value) => {
+              const next: CheckInStatusFilter | null =
+                value === 'Checked In' ? 'checkedIn' : value === 'Pending' ? 'pending' : null;
+              setFilters({ ...filters, status: next });
+            }}
+            placeholder="All"
+            labelColor={Colors.white}
+          />
+        </View>
 
         <View style={styles.searchContainer}>
           <Search size={20} color={Colors.textMuted} style={styles.searchIcon} />
