@@ -9,3 +9,6 @@ supabase/.temp/
 expo/supabase/.temp/
 vercel_logs.txt
 expo/utah-little-rugby-2026-regs-*.json
+
+# Cursor IDE local hook state, agent transcripts, etc.
+.cursor/
