@@ -5,7 +5,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   owner: 'tmcd23',
   name: 'Utah Little Rugby',
   slug: 'utah-little-rugby',
-  version: '3.0.0',
+  version: '3.2.0',
   orientation: 'portrait',
   icon: './assets/images/icon.png',
   scheme: 'utah-little-rugby',
@@ -19,7 +19,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ios: {
     supportsTablet: true,
     bundleIdentifier: 'com.rosterupapp.app',
-    buildNumber: '1',
+    buildNumber: '60',
     infoPlist: {
       NSPhotoLibraryUsageDescription:
         'Allow $(PRODUCT_NAME) to access your photos to add player profile pictures.',
