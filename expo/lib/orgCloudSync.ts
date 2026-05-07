@@ -60,6 +60,10 @@ export interface RemoteOrg {
   owner_id: string;
   created_at: string;
   expires_at: string | null;
+  // Added in migration 040. Older RPCs that don't return this column will
+  // produce undefined; callers should treat undefined/null as true so we
+  // don't accidentally hide orgs that pre-date the column.
+  is_active?: boolean | null;
 }
 
 async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: number = 8000): Promise<{ ok: true; data: T } | { ok: false; error: string }> {

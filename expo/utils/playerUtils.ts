@@ -108,11 +108,9 @@ export function getRestrictionStatusLabel(status: RestrictionStatus): string {
   switch (status) {
     case 'penny_player':
       return 'Pennie Player (Touch Only)';
-    case 'play_up':
-      return 'Playing Up';
     case 'open_division':
       return 'Open Division';
-    default:
+    case 'none':
       return '';
   }
 }
@@ -121,11 +119,15 @@ export function getRestrictionStatusColor(status: RestrictionStatus): string {
   switch (status) {
     case 'penny_player':
       return '#F59E0B';
-    case 'play_up':
-      return '#8B5CF6';
     case 'open_division':
       return '#3B82F6';
-    default:
+    case 'none':
       return '#6B7280';
   }
 }
+
+// Stable color for the play-up chip. Kept separate from the restriction
+// color so a "Play Up + Open Division" badge group can carry both
+// without color clash.
+export const PLAY_UP_COLOR = '#8B5CF6';
+export const PLAY_UP_LABEL = 'Playing Up';

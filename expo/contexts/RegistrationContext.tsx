@@ -9,6 +9,7 @@ import { fetchClubs } from '@/lib/clubsRepo';
 import { trpc } from '@/lib/trpc';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOrganization } from '@/contexts/OrganizationContext';
+import { supabase } from '@/lib/supabase';
 import {
   loadCloudSyncQueue,
   saveCloudSyncQueue,
@@ -200,7 +201,15 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   // eslint-disable-next-line rork/general-context-optimization
   const trpcUtils = trpc.useUtils();
   // eslint-disable-next-line rork/general-context-optimization
-  const { canEdit, isAdmin, revalidateEditorSession, setEventLockedForEditors, setIsOrgOwner } = useAuth();
+  const {
+    canEdit,
+    isAdmin,
+    revalidateEditorSession,
+    setEventLockedForEditors,
+    setIsOrgOwner,
+    authUserId,
+    setIsOrgAdminViaAuth,
+  } = useAuth();
   // eslint-disable-next-line rork/general-context-optimization
   const { currentOrg, members } = useOrganization();
 
@@ -223,6 +232,50 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     console.log('[auth] org-owner check for', currentOrg.code, '->', isOwner);
     setIsOrgOwner(isOwner);
   }, [currentOrg, members, setIsOrgOwner]);
+
+  // Auth-backed org admin (migration 032). When the signed-in auth user
+  // has an org_members row with role admin/owner for the active org, we
+  // flip a flag in AuthContext so the admin UI shows up regardless of
+  // the device-owner check above. This is what allows e.g. a co-coach
+  // granted via grant_org_admin_by_email to administer their org from
+  // their own phone.
+  useEffect(() => {
+    let cancelled = false;
+    if (!authUserId || !currentOrg) {
+      setIsOrgAdminViaAuth(false);
+      return;
+    }
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('org_members')
+          .select('id')
+          .eq('org_id', currentOrg.id)
+          .eq('auth_uid', authUserId)
+          .in('role', ['owner', 'admin'])
+          .limit(1);
+        if (cancelled) return;
+        if (error) {
+          // org_members.auth_uid doesn't exist pre-migration. Don't spam
+          // the console; just treat as not-an-org-admin.
+          if (!/auth_uid|column .* does not exist/i.test(error.message)) {
+            console.warn('[auth] org-admin-via-auth lookup failed:', error.message);
+          }
+          setIsOrgAdminViaAuth(false);
+          return;
+        }
+        setIsOrgAdminViaAuth((data?.length ?? 0) > 0);
+      } catch (err) {
+        if (!cancelled) {
+          console.warn('[auth] org-admin-via-auth threw:', err);
+          setIsOrgAdminViaAuth(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authUserId, currentOrg, setIsOrgAdminViaAuth]);
   const orgIdForRegistry = currentOrg?.id ?? 'utah-little-rugby';
   const orgScope = currentOrg?.id ?? NO_ORG_SCOPE;
   const orgScopeRef = useRef<string>(orgScope);
@@ -546,33 +599,27 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     [flushPendingChanges],
   );
 
-  useEffect(() => {
-    if (!currentOrg?.id) return;
-    let cancelled = false;
-
-    // Audit High: previously this effect blindly overwrote any local
-    // player by ID with the remote copy before the cloud queue had even
-    // loaded. If a volunteer had unsynced offline edits, they were
-    // silently dropped on the next launch.
-    //
-    // Fix: load the persisted cloud sync queue first, layer it on top of
-    // local storage so the map represents "what this device thinks the
-    // truth is, including writes not yet pushed", then merge remote rows
-    // per-field via mergePlayerRecords. Local-only fields (a freshly
-    // captured photo / weight that isn't on the server yet) survive.
-    // Finally, kick off a queue flush so the merged-but-unpushed edits
-    // get up to Supabase ASAP.
-    const mergeRemoteRoster = async () => {
+  // Performs the queue-aware merge of (cloud roster) + (persisted queue) +
+  // (locally stored roster). Extracted from the org-change useEffect below
+  // so it's also callable on demand (e.g. on roster screen focus).
+  //
+  // Re-entrancy: if the active org changes mid-fetch, the second branch
+  // bails out before mutating state. Callers should ignore the resolved
+  // value -- the function returns a status string for logging / UI.
+  const refreshRosterFromCloud = useCallback(
+    async (): Promise<'ok' | 'no-org' | 'aborted' | 'error'> => {
+      const orgId = cloudOrgRef.current;
+      if (!orgId) return 'no-org';
       try {
         const stored = await AsyncStorage.getItem(playersKey());
-        if (cancelled) return;
+        if (cloudOrgRef.current !== orgId) return 'aborted';
         const localStored: Player[] = stored ? JSON.parse(stored) : [];
 
         // Read the queue directly from AsyncStorage (instead of from
         // cloudQueueRef.current) because the queue-loading effect runs
         // independently and may not have populated state yet.
-        const persistedQueue = await loadCloudSyncQueue(currentOrg.id);
-        if (cancelled) return;
+        const persistedQueue = await loadCloudSyncQueue(orgId);
+        if (cloudOrgRef.current !== orgId) return 'aborted';
         const queuedById = new Map<string, Player>();
         for (const q of persistedQueue) {
           queuedById.set(q.playerId, q.player);
@@ -594,12 +641,12 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
           }
         }
 
-        const remote = await fetchRoster(currentOrg.id);
-        if (cancelled) return;
+        const remote = await fetchRoster(orgId);
+        if (cloudOrgRef.current !== orgId) return 'aborted';
 
         if (remote.length === 0 && localById.size === 0) {
           console.log('[rosterSync] both remote and local empty, nothing to merge');
-          return;
+          return 'ok';
         }
 
         // Merge. For ids only in one side: take that side. For ids in
@@ -666,18 +713,24 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         // After we've reconciled local + remote, push anything still in
         // the queue. flushCloudQueueRef is wired by the useCallback below;
         // it may be null on the very first render, in which case the
-        // separate "auto-flush on launch" effect at line ~810 will catch
-        // it on the next tick.
-        if (!cancelled) {
-          const flush = flushCloudQueueRef.current;
-          if (flush) void flush();
-        }
+        // separate "auto-flush on launch" effect will catch it on the
+        // next tick.
+        const flush = flushCloudQueueRef.current;
+        if (flush) void flush();
+        return 'ok';
       } catch (err) {
-        console.warn('[rosterSync] initial fetch failed (using local cache):', err);
+        console.warn('[rosterSync] refreshRosterFromCloud failed (using local cache):', err);
+        return 'error';
       }
-    };
+    },
+    [queryClient, playersKey],
+  );
 
-    void mergeRemoteRoster();
+  useEffect(() => {
+    if (!currentOrg?.id) return;
+    let cancelled = false;
+
+    void refreshRosterFromCloud();
 
     const unsubscribe = subscribeToRoster(currentOrg.id, (change) => {
       if (cancelled) return;
@@ -693,7 +746,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       }
       pendingChangesRef.current = new Map();
     };
-  }, [currentOrg?.id, queryClient, applyRosterChangeLocally, playersKey]);
+  }, [currentOrg?.id, applyRosterChangeLocally, refreshRosterFromCloud]);
 
   // ---------------------------------------------------------------------------
   // Cross-device event_mode sync.
@@ -776,8 +829,17 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(false);
   const [lastCloudSyncedAt, setLastCloudSyncedAt] = useState<string | null>(null);
   const [lastCloudSyncResult, setLastCloudSyncResult] = useState<FlushResult | null>(null);
+  // Tracks the device's network connectivity. Defaults to `true` so the app
+  // doesn't render "Offline" badges on cold start before NetInfo has fired
+  // its first event. Updated by the NetInfo listener registered below.
+  const [isOnline, setIsOnline] = useState<boolean>(true);
   const cloudQueueRef = useRef<CloudSyncItem[]>([]);
   const isCloudSyncingRef = useRef<boolean>(false);
+  // When a flush is already running and a new edit gets enqueued, we set
+  // this flag so the in-flight flush can immediately kick another flush
+  // when it finishes. Without this, rapid successive check-ins would sit
+  // in the queue waiting for the next periodic retry / network event.
+  const cloudFlushPendingRef = useRef<boolean>(false);
   const cloudOrgRef = useRef<string | null>(null);
   cloudOrgRef.current = currentOrg?.id ?? null;
 
@@ -846,7 +908,13 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     const orgId = cloudOrgRef.current;
     if (!orgId) return null;
     if (isCloudSyncingRef.current) {
-      console.log('[cloudSync] flush already in progress, skipping');
+      // Flush is already running. Mark "pending" so the in-flight call
+      // re-flushes once it finishes, picking up anything that was
+      // enqueued while it was running. This fixes the "kid 2 and 3 sit
+      // in the queue waiting" gap when a volunteer rapid-fires several
+      // check-ins back to back.
+      cloudFlushPendingRef.current = true;
+      console.log('[cloudSync] flush already in progress, marking re-flush pending');
       return null;
     }
     const items = cloudQueueRef.current;
@@ -900,6 +968,19 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     } finally {
       isCloudSyncingRef.current = false;
       setIsCloudSyncing(false);
+      // If anything else asked for a flush while we were running, fire
+      // one more pass on the next tick. We deliberately don't await it
+      // (this is fire-and-forget) and we read the ref via the wrapper
+      // so we don't capture a stale `flushCloudQueueNow` value.
+      if (cloudFlushPendingRef.current) {
+        cloudFlushPendingRef.current = false;
+        const next = flushCloudQueueRef.current;
+        if (next) {
+          setTimeout(() => {
+            void next();
+          }, 0);
+        }
+      }
     }
   }, [persistCloudQueue]);
 
@@ -1072,6 +1153,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       const online = state.isConnected ?? true;
+      setIsOnline(online);
       if (online && cloudOrgRef.current) {
         console.log('[cloudSync] network back online, flushing queues');
         void flushCloudQueueNow();
@@ -1882,6 +1964,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       const target = normalizeStr(filters.teamName);
       result = result.filter(p => normalizeStr(p.teamName) === target);
     }
+    if (filters.status === 'checkedIn') {
+      result = result.filter(p => p.checkedIn);
+    } else if (filters.status === 'pending') {
+      result = result.filter(p => !p.checkedIn);
+    }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
       result = result.filter(p => 
@@ -2419,10 +2506,12 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     cloudPendingCount: cloudQueue.length,
     cloudPendingItems: cloudQueue,
     isCloudSyncing,
+    isOnline,
     lastCloudSyncedAt,
     lastCloudSyncResult,
     flushCloudQueueNow,
     forceSyncAllToCloud,
+    refreshRosterFromCloud,
     enqueuePhotoUpload,
     flushPhotoQueueNow,
     photoUploadPendingCount: photoUploadQueue.length,
@@ -2441,8 +2530,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     eventMode, setEventMode,
     showTeamAssignment, setShowTeamAssignment,
     isPreviouslyAgeVerified, verifiedRegistry,
-    cloudQueue, isCloudSyncing, lastCloudSyncedAt, lastCloudSyncResult,
-    flushCloudQueueNow, forceSyncAllToCloud,
+    cloudQueue, isCloudSyncing, isOnline, lastCloudSyncedAt, lastCloudSyncResult,
+    flushCloudQueueNow, forceSyncAllToCloud, refreshRosterFromCloud,
     enqueuePhotoUpload, flushPhotoQueueNow, photoUploadQueue.length,
   ]);
 });

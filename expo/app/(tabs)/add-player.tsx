@@ -72,6 +72,7 @@ export default function AddPlayerScreen() {
   const [isAgeVerified, setIsAgeVerified] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [restrictionStatus, setRestrictionStatus] = useState<RestrictionStatus>('none');
+  const [playsUp, setPlaysUp] = useState<boolean>(false);
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [pendingWeight, setPendingWeight] = useState('');
   const [playUpAgeGroup, setPlayUpAgeGroup] = useState<string | null>(null);
@@ -87,6 +88,7 @@ export default function AddPlayerScreen() {
     setIsAgeVerified(false);
     setPhotoUri(null);
     setRestrictionStatus('none');
+    setPlaysUp(false);
     setPlayUpAgeGroup(null);
   };
 
@@ -146,8 +148,11 @@ export default function AddPlayerScreen() {
   const handleRestrictionSelect = (status: RestrictionStatus) => {
     setRestrictionStatus(status);
     setShowWeightModal(false);
+  };
 
-    if (status === 'play_up') {
+  const handlePlaysUpChange = (next: boolean) => {
+    setPlaysUp(next);
+    if (next) {
       const nextAgeGroup = getNextAgeGroup(effectiveAgeGroup);
       if (nextAgeGroup) {
         console.log(`Moving player from ${effectiveAgeGroup} to ${nextAgeGroup}`);
@@ -286,6 +291,7 @@ export default function AddPlayerScreen() {
         checkedIn: true,
         checkedInAt: new Date().toISOString(),
         restrictionStatus,
+        playsUp,
         calculatedAgeGroup: calculatedAgeGroup || undefined,
       });
 
@@ -491,6 +497,8 @@ export default function AddPlayerScreen() {
         visible={showWeightModal}
         onClose={() => setShowWeightModal(false)}
         onSelect={handleRestrictionSelect}
+        playsUp={playsUp}
+        onPlaysUpChange={handlePlaysUpChange}
         playerName={`${firstName} ${lastName}`.trim() || 'This player'}
         currentWeight={parseFloat(pendingWeight) || 0}
         weightLimit={checkWeightRestriction(effectiveAgeGroup, pendingWeight, division || '').limit || 0}

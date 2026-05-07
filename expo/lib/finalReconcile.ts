@@ -50,10 +50,31 @@ function safeParsePlayers(raw: string | null): Player[] {
   }
 }
 
-async function gatherAllLocalPlayers(): Promise<{ players: Player[]; scopes: string[] }> {
+async function gatherLocalPlayersForOrgs(
+  allowedOrgIds: ReadonlySet<string>,
+): Promise<{ players: Player[]; scopes: string[] }> {
+  // Only pull from scopes whose org_id is in `allowedOrgIds`.
+  //
+  // This used to read every `registration_players:*` scope on the device,
+  // which was correct for the original intent (rescue rosters when an
+  // org's id changed between app versions) but catastrophic on
+  // multi-org devices: opening an unrelated org for the first time
+  // would auto-merge every other org's local roster into it. See the
+  // post-mortem on the Spring 2026 rows that ended up under the Summer
+  // 7's org_id.
+  //
+  // The caller (`runFinalReconcile`) computes `allowedOrgIds` from the
+  // set of cloud orgs that share an invite code with the canonical
+  // org, so the cross-id-merge case still works for legitimately-
+  // duplicate orgs.
   try {
     const keys = await AsyncStorage.getAllKeys();
-    const playerKeys = keys.filter((k) => k.startsWith(PLAYERS_KEY_PREFIX));
+    const playerKeys = keys
+      .filter((k) => k.startsWith(PLAYERS_KEY_PREFIX))
+      .filter((k) => {
+        const orgIdFromKey = k.slice(PLAYERS_KEY_PREFIX.length);
+        return allowedOrgIds.has(orgIdFromKey);
+      });
     let collected: Player[] = [];
     for (const k of playerKeys) {
       const raw = await AsyncStorage.getItem(k);
@@ -65,7 +86,7 @@ async function gatherAllLocalPlayers(): Promise<{ players: Player[]; scopes: str
     }
     return { players: collected, scopes: [...playerKeys] };
   } catch (err) {
-    console.warn('[finalReconcile] gatherAllLocalPlayers failed:', err);
+    console.warn('[finalReconcile] gatherLocalPlayersForOrgs failed:', err);
     return { players: [], scopes: [] };
   }
 }
@@ -133,9 +154,15 @@ export async function runFinalReconcile(
 ): Promise<ReconcileResult> {
   console.log('[finalReconcile] starting for org', orgCode, '->', canonicalOrgId);
 
-  const { players: localPlayers, scopes } = await gatherAllLocalPlayers();
-
+  // Resolve the cloud orgs that share this invite code FIRST so we can
+  // restrict the local sweep to just those org_ids. Anything else on
+  // the device belongs to a different org and must not be uploaded
+  // here.
   const cloudOrgIds = await findCloudOrgIdsByCode(orgCode, canonicalOrgId);
+  const allowedOrgIds = new Set<string>(cloudOrgIds);
+  allowedOrgIds.add(canonicalOrgId);
+
+  const { players: localPlayers, scopes } = await gatherLocalPlayersForOrgs(allowedOrgIds);
   const cloudPlayers = await pullAllCloudRosters(cloudOrgIds);
 
   const combined = [...cloudPlayers, ...localPlayers];

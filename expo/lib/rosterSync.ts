@@ -19,6 +19,11 @@ export interface RosterPlayerRow {
   checked_in: boolean | null;
   checked_in_at: string | null;
   restriction_status: string | null;
+  // Migration 046 split the legacy 'play_up' enum value out of
+  // restriction_status into its own boolean column. Older clients may
+  // not see this column on cold reads (PostgREST will just omit it),
+  // so the row->player mapper treats it as optional.
+  plays_up?: boolean | null;
   calculated_age_group: string | null;
   // Server-managed: rewritten by the touch_roster_players_updated_at trigger
   // on every write. Useful for replication ordering, NOT for "did the local
@@ -34,12 +39,20 @@ export interface RosterPlayerRow {
 const VALID_RESTRICTIONS: RestrictionStatus[] = [
   'none',
   'penny_player',
-  'play_up',
   'open_division',
 ];
 
 export function rowToPlayer(row: RosterPlayerRow): Player {
-  const restriction = (row.restriction_status ?? 'none') as RestrictionStatus;
+  const rawRestriction = (row.restriction_status ?? 'none') as string;
+  // Pre-046 rows may still carry 'play_up' until they're rewritten by
+  // the migration. Treat that as plays_up=true with the contact rule
+  // defaulted to 'none', matching the new model.
+  const isLegacyPlayUp = rawRestriction === 'play_up';
+  const restriction: RestrictionStatus = isLegacyPlayUp
+    ? 'none'
+    : (VALID_RESTRICTIONS.includes(rawRestriction as RestrictionStatus)
+        ? (rawRestriction as RestrictionStatus)
+        : 'none');
   return {
     id: row.id,
     firstName: row.first_name ?? '',
@@ -56,7 +69,8 @@ export function rowToPlayer(row: RosterPlayerRow): Player {
     weight: row.weight ?? '',
     checkedIn: !!row.checked_in,
     checkedInAt: row.checked_in_at ?? null,
-    restrictionStatus: VALID_RESTRICTIONS.includes(restriction) ? restriction : 'none',
+    restrictionStatus: restriction,
+    playsUp: row.plays_up ?? isLegacyPlayUp,
     calculatedAgeGroup: row.calculated_age_group ?? undefined,
   };
 }
@@ -98,6 +112,7 @@ export function playerToRow(
     checked_in: !!player.checkedIn,
     checked_in_at: player.checkedInAt ?? null,
     restriction_status: player.restrictionStatus ?? 'none',
+    plays_up: !!player.playsUp,
     calculated_age_group: player.calculatedAgeGroup ?? null,
     client_updated_at: clientUpdatedAt ?? new Date().toISOString(),
     updated_by: updatedBy ?? null,

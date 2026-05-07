@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   RefreshControl,
   Image,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import {
   Search,
   Users,
@@ -27,9 +27,16 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRegistration } from '@/contexts/RegistrationContext';
 import FilterDropdown from '@/components/FilterDropdown';
+import SyncStatusBadge from '@/components/SyncStatusBadge';
 import Colors from '@/constants/colors';
 import { Player, RestrictionStatus } from '@/types';
 import { getRestrictionStatusLabel, getRestrictionStatusColor } from '@/utils/playerUtils';
+
+// Don't re-pull the cloud roster on every focus event -- tab-switching
+// would hammer Supabase. 10 seconds is short enough that returning from
+// the player profile after a check-in feels live, long enough that
+// rapid tab toggles don't create traffic.
+const REFRESH_ON_FOCUS_DEBOUNCE_MS = 10_000;
 
 const ItemSeparator = React.memo(() => <View style={separatorStyle.separator} />);
 const separatorStyle = StyleSheet.create({ separator: { height: 1, backgroundColor: Colors.border, marginLeft: 56 } });
@@ -45,10 +52,27 @@ export default function RosterScreen() {
     divisions,
     isLoading,
     refreshData,
-  } = useRegistration();
+    refreshRosterFromCloud,
+  } = useRegistration() as ReturnType<typeof useRegistration> & {
+    refreshRosterFromCloud: () => Promise<'ok' | 'no-org' | 'aborted' | 'error'>;
+  };
 
   // Use teams from context directly
   const teamNames = teams;
+
+  // Debounce the cloud refresh on focus so quickly tabbing in and out
+  // doesn't fire a fetch each time.
+  const lastFocusRefreshRef = useRef<number>(0);
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (now - lastFocusRefreshRef.current < REFRESH_ON_FOCUS_DEBOUNCE_MS) {
+        return;
+      }
+      lastFocusRefreshRef.current = now;
+      void refreshRosterFromCloud();
+    }, [refreshRosterFromCloud]),
+  );
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClub, setSelectedClub] = useState<string | null>(null);
@@ -125,6 +149,7 @@ export default function RosterScreen() {
   const renderPlayerItem = useCallback(({ item }: { item: Player }) => {
     const hasPhoto = item.photoUri && item.isAgeVerified;
     const restrictionStatus = item.restrictionStatus as RestrictionStatus | undefined;
+    const playsUp = !!item.playsUp;
     
     return (
       <TouchableOpacity
@@ -157,7 +182,7 @@ export default function RosterScreen() {
                 <Shirt size={16} color="#DC2626" fill="#DC2626" fillOpacity={0.2} />
               </View>
             )}
-            {restrictionStatus === 'play_up' && (
+            {playsUp && (
               <View style={styles.iconBadge}>
                 <ArrowUp size={18} color="#2563EB" />
               </View>
@@ -249,9 +274,12 @@ export default function RosterScreen() {
           <Users size={28} color={Colors.white} />
           <Text style={styles.title}>Player Roster</Text>
         </View>
-        <Text style={styles.subtitle}>
-          {stats.checkedIn} of {stats.total} players checked in
-        </Text>
+        <View style={styles.headerStatsRow}>
+          <Text style={styles.subtitle}>
+            {stats.checkedIn} of {stats.total} players checked in
+          </Text>
+          <SyncStatusBadge />
+        </View>
       </View>
 
       <View style={styles.searchSection}>
@@ -321,7 +349,7 @@ export default function RosterScreen() {
           {teamNames.length > 0 && (
             <View style={styles.filterRowSecond}>
               <FilterDropdown
-                label={`Team${availableTeams.length > 0 ? ` (${availableTeams.length})` : ''}`}
+                label="Team"
                 value={selectedTeamName}
                 options={availableTeams}
                 onSelect={setSelectedTeamName}
@@ -410,6 +438,12 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.8)',
     marginLeft: 38,
   },
+  headerStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingRight: 4,
+  },
   searchSection: {
     flexDirection: 'row',
     paddingHorizontal: 16,
@@ -463,6 +497,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   filterRowSecond: {
+    flexDirection: 'row',
     marginTop: 10,
   },
   filterSpacer: {

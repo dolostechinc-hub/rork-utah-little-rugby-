@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ import {
   Users,
   ChevronRight,
   RotateCcw,
+  Shield,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -65,8 +66,14 @@ export default function PlayerDetailScreen() {
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [weight, setWeight] = useState('');
   const [restrictionStatus, setRestrictionStatus] = useState<RestrictionStatus>('none');
+  const [playsUp, setPlaysUp] = useState<boolean>(false);
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [pendingWeight, setPendingWeight] = useState('');
+  // Distinguishes "kid weighed in over the limit, must pick a placement
+  // to proceed" from "coach voluntarily placing a kid in an alternate
+  // bracket". Voluntary mode shows a close button and a Standard/None
+  // option so coaches can also clear the restriction.
+  const [restrictionModalMode, setRestrictionModalMode] = useState<'overweight' | 'voluntary'>('overweight');
   const [playUpAgeGroup, setPlayUpAgeGroup] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isRegisteringWeight, setIsRegisteringWeight] = useState(false);
@@ -134,12 +141,20 @@ export default function PlayerDetailScreen() {
     setIsAgeVerified(!!player.isAgeVerified || registryVerified);
     setPhotoUri(player.photoUri ?? null);
     setWeight(player.weight ?? '');
-    setRestrictionStatus((player as any).restrictionStatus || 'none');
+    // Migration 046 split play-up out of restriction_status. Older
+    // local cache rows may still carry the legacy 'play_up' enum value
+    // until the next cloud round-trip rewrites them, so map both:
+    //   - if `playsUp` is set, trust it
+    //   - else if restrictionStatus is the legacy 'play_up', treat as
+    //     plays_up=true with restrictionStatus normalized to 'none'
+    const rawRestriction = (player as { restrictionStatus?: string }).restrictionStatus ?? 'none';
+    const isLegacyPlayUp = rawRestriction === 'play_up';
+    setRestrictionStatus(
+      isLegacyPlayUp ? 'none' : ((rawRestriction as RestrictionStatus) || 'none'),
+    );
+    setPlaysUp(player.playsUp ?? isLegacyPlayUp);
 
-    if (
-      (player as any).restrictionStatus === 'play_up' &&
-      (player as any).calculatedAgeGroup
-    ) {
+    if (player.playsUp || isLegacyPlayUp) {
       setPlayUpAgeGroup(player.ageGroup);
     } else {
       setPlayUpAgeGroup(null);
@@ -163,11 +178,17 @@ export default function PlayerDetailScreen() {
         player.division
       );
 
+      // Only force the modal open when a kid is over the weight limit.
+      // We deliberately do NOT clear the existing restriction when the
+      // weight is under the limit -- coaches can voluntarily place a
+      // player in play_up, open_division, or pennie regardless of
+      // weight, and updating the weight should never silently undo
+      // that election. Clearing back to 'none' is a deliberate action
+      // taken from the Special Placement card below.
       if (restriction.isOverweight && restriction.limit) {
         setPendingWeight(newWeight);
+        setRestrictionModalMode('overweight');
         setShowWeightModal(true);
-      } else {
-        setRestrictionStatus('none');
       }
     }
   };
@@ -175,8 +196,11 @@ export default function PlayerDetailScreen() {
   const handleRestrictionSelect = (status: RestrictionStatus) => {
     setRestrictionStatus(status);
     setShowWeightModal(false);
+  };
 
-    if (status === 'play_up') {
+  const handlePlaysUpChange = (next: boolean) => {
+    setPlaysUp(next);
+    if (next) {
       const nextAgeGroup = getNextAgeGroup(effectiveAgeGroup);
       if (nextAgeGroup) {
         console.log(`Moving player from ${effectiveAgeGroup} to ${nextAgeGroup}`);
@@ -186,6 +210,13 @@ export default function PlayerDetailScreen() {
       setPlayUpAgeGroup(null);
     }
   };
+
+  const handleOpenVoluntaryRestriction = useCallback(() => {
+    if (!canEdit || !player) return;
+    setPendingWeight((weight.trim() || player.weight || '').toString());
+    setRestrictionModalMode('voluntary');
+    setShowWeightModal(true);
+  }, [canEdit, player, weight]);
 
   if (!player) {
     return (
@@ -265,6 +296,7 @@ export default function PlayerDetailScreen() {
         photoUri: photoUri ?? player.photoUri,
         weight: trimmed,
         restrictionStatus,
+        playsUp,
         calculatedAgeGroup: calculatedAgeGroup || undefined,
       });
 
@@ -328,6 +360,7 @@ export default function PlayerDetailScreen() {
         checkedIn,
         checkedInAt: new Date().toISOString(),
         restrictionStatus,
+        playsUp,
         ageGroup: finalAgeGroup,
         calculatedAgeGroup: calculatedAgeGroup || undefined,
       });
@@ -372,6 +405,7 @@ export default function PlayerDetailScreen() {
   };
 
   const isComplete = isAgeVerified && photoUri !== null && weight.trim() !== '';
+  const isCheckedIn = !!player?.checkedIn;
 
   return (
     <>
@@ -576,44 +610,88 @@ export default function PlayerDetailScreen() {
               </View>
             </View>
 
-            {restrictionStatus && restrictionStatus !== 'none' && (
+            {(restrictionStatus && restrictionStatus !== 'none') || playsUp ? (
               <TouchableOpacity
                 style={[
                   styles.restrictionCard,
-                  { borderColor: getRestrictionStatusColor(restrictionStatus) },
+                  {
+                    borderColor:
+                      restrictionStatus && restrictionStatus !== 'none'
+                        ? getRestrictionStatusColor(restrictionStatus)
+                        : '#8B5CF6',
+                  },
                 ]}
                 activeOpacity={canEdit ? 0.7 : 1}
                 disabled={!canEdit}
-                onPress={() => {
-                  if (!canEdit) return;
-                  const currentWeight = weight.trim() || player.weight || '';
-                  setPendingWeight(currentWeight);
-                  setShowWeightModal(true);
-                }}
+                onPress={handleOpenVoluntaryRestriction}
                 testID="restriction-reselect"
               >
                 <AlertTriangle
                   size={20}
-                  color={getRestrictionStatusColor(restrictionStatus)}
+                  color={
+                    restrictionStatus && restrictionStatus !== 'none'
+                      ? getRestrictionStatusColor(restrictionStatus)
+                      : '#8B5CF6'
+                  }
                 />
                 <View style={styles.restrictionContent}>
-                  <Text
-                    style={[
-                      styles.restrictionTitle,
-                      { color: getRestrictionStatusColor(restrictionStatus) },
-                    ]}
-                  >
-                    {getRestrictionStatusLabel(restrictionStatus)}
-                  </Text>
+                  <View style={styles.placementChipRow}>
+                    {playsUp && (
+                      <View style={[styles.placementChip, { backgroundColor: '#EDE9FE' }]}>
+                        <Text style={[styles.placementChipText, { color: '#8B5CF6' }]}>
+                          Playing Up
+                          {playUpAgeGroup ? ` → ${playUpAgeGroup}` : ''}
+                        </Text>
+                      </View>
+                    )}
+                    {restrictionStatus && restrictionStatus !== 'none' && (
+                      <View
+                        style={[
+                          styles.placementChip,
+                          {
+                            backgroundColor:
+                              restrictionStatus === 'penny_player' ? '#FEF3C7' : '#DBEAFE',
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.placementChipText,
+                            { color: getRestrictionStatusColor(restrictionStatus) },
+                          ]}
+                        >
+                          {getRestrictionStatusLabel(restrictionStatus)}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                   <Text style={styles.restrictionSubtitle}>
                     {canEdit
-                      ? 'Tap to change this selection'
-                      : 'Player is over weight limit for restricted division'}
+                      ? 'Tap to change or clear this placement'
+                      : 'Special placement set by an admin'}
                   </Text>
                 </View>
                 {canEdit && <ChevronRight size={18} color={Colors.textMuted} />}
               </TouchableOpacity>
-            )}
+            ) : canEdit ? (
+              <TouchableOpacity
+                style={[styles.restrictionCard, styles.specialPlacementCard]}
+                activeOpacity={0.7}
+                onPress={handleOpenVoluntaryRestriction}
+                testID="restriction-add"
+              >
+                <Shield size={20} color={Colors.primary} />
+                <View style={styles.restrictionContent}>
+                  <Text style={[styles.restrictionTitle, { color: Colors.primary }]}>
+                    Special Placement
+                  </Text>
+                  <Text style={styles.restrictionSubtitle}>
+                    Tap to play up, join open division, or mark as pennie player
+                  </Text>
+                </View>
+                <ChevronRight size={18} color={Colors.textMuted} />
+              </TouchableOpacity>
+            ) : null}
           </View>
 
           <View style={styles.statusSection}>
@@ -634,7 +712,11 @@ export default function PlayerDetailScreen() {
                   isComplete ? styles.statusTextComplete : styles.statusTextIncomplete,
                 ]}
               >
-                {isComplete ? 'Ready to Check In' : 'Verification Incomplete'}
+                {isCheckedIn
+                  ? 'Checked In'
+                  : isComplete
+                    ? 'Ready to Check In'
+                    : 'Verification Incomplete'}
               </Text>
             </View>
 
@@ -664,9 +746,11 @@ export default function PlayerDetailScreen() {
                     ? 'Uploading Photo...'
                     : isUpdating
                       ? 'Syncing...'
-                      : isComplete
-                        ? 'Complete Check-In'
-                        : 'Complete Required Fields'}
+                      : isCheckedIn
+                        ? 'Save Changes'
+                        : isComplete
+                          ? 'Complete Check-In'
+                          : 'Complete Required Fields'}
                 </Text>
               </TouchableOpacity>
 
@@ -741,7 +825,10 @@ export default function PlayerDetailScreen() {
           visible={showWeightModal}
           onClose={() => setShowWeightModal(false)}
           onSelect={handleRestrictionSelect}
+          playsUp={playsUp}
+          onPlaysUpChange={handlePlaysUpChange}
           playerName={`${player.firstName} ${player.lastName}`}
+          mode={restrictionModalMode}
           currentWeight={parseFloat(pendingWeight) || 0}
           weightLimit={
             checkWeightRestriction(effectiveAgeGroup, pendingWeight, player.division).limit || 0
@@ -1088,6 +1175,11 @@ const styles = StyleSheet.create({
     marginTop: 12,
     borderWidth: 2,
   },
+  specialPlacementCard: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
+    borderStyle: 'dashed',
+  },
   restrictionContent: {
     flex: 1,
     marginLeft: 14,
@@ -1096,6 +1188,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600' as const,
     marginBottom: 2,
+  },
+  placementChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 4,
+  },
+  placementChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  placementChipText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
   },
   restrictionSubtitle: {
     fontSize: 12,

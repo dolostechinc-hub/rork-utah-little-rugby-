@@ -71,6 +71,20 @@ import {
   revokeEditorSession,
   type ActiveEditorSession,
 } from '@/lib/editorSession';
+import {
+  listOrgAdmins,
+  grantOrgAdmin,
+  revokeOrgAdmin,
+  type OrgAdmin,
+} from '@/lib/orgAdmin';
+import {
+  listAppAdmins,
+  grantAppAdmin,
+  revokeAppAdmin,
+  grantOrgAdminByEmail,
+  type AppAdmin,
+} from '@/lib/appAdmin';
+import { LogOut, Mail } from 'lucide-react-native';
 import { useOrganization } from '@/contexts/OrganizationContext';
 import * as Clipboard from 'expo-clipboard';
 import Colors from '@/constants/colors';
@@ -123,7 +137,7 @@ export default function SettingsScreen() {
     cloudPendingCount: number;
     isCloudSyncing: boolean;
     lastCloudSyncedAt: string | null;
-    lastCloudSyncResult: { synced: string[]; skipped: string[]; failed: { itemId: string; playerId: string; error: string }[] } | null;
+    lastCloudSyncResult: { synced: string[]; merged: string[]; failed: { itemId: string; playerId: string; error: string }[] } | null;
     flushCloudQueueNow: () => Promise<unknown>;
     forceSyncAllToCloud: () => Promise<{ ok: boolean; synced: number; skipped: number; failed: number; error?: string; reconcile?: { mergedTotal: number; cloudOrgsFound: number; duplicateOrgIdsMerged: string[]; localPlayersCollected: number; cloudPlayersCollected: number; scopesScanned: number } }>;
   };
@@ -164,6 +178,14 @@ export default function SettingsScreen() {
     revokeAllEditorAccess,
     editorSession,
     grantAdminToOwner,
+    authUserId,
+    authEmail,
+    isAppAdmin,
+    isAuthLoaded,
+    signInWithEmail,
+    verifyEmailOtp,
+    signOut,
+    refreshAppAdminStatus,
   } = useAuth();
   const editorPinEnabled = true;
 
@@ -176,6 +198,7 @@ export default function SettingsScreen() {
     selectOrg,
     deleteOrg,
     leaveOrg,
+    setOrgActive,
     members,
     isLoading: _isOrgLoading,
   } = useOrganization();
@@ -203,6 +226,36 @@ export default function SettingsScreen() {
   const [activeEditors, setActiveEditors] = useState<ActiveEditorSession[]>([]);
   const [loadingActiveEditors, setLoadingActiveEditors] = useState<boolean>(false);
   const [activeEditorsError, setActiveEditorsError] = useState<string | null>(null);
+  const [orgAdmins, setOrgAdmins] = useState<OrgAdmin[]>([]);
+  const [loadingOrgAdmins, setLoadingOrgAdmins] = useState<boolean>(false);
+  const [orgAdminsError, setOrgAdminsError] = useState<string | null>(null);
+  const [showGrantAdminModal, setShowGrantAdminModal] = useState(false);
+  const [grantUserIdInput, setGrantUserIdInput] = useState('');
+  const [grantNameInput, setGrantNameInput] = useState('');
+  const [grantEmailInput, setGrantEmailInput] = useState('');
+  const [grantSubmitting, setGrantSubmitting] = useState(false);
+  const [grantError, setGrantError] = useState<string | null>(null);
+  // ---- Auth: sign in modal -----------------------------------------------
+  const [showSignInModal, setShowSignInModal] = useState(false);
+  const [signInEmailInput, setSignInEmailInput] = useState('');
+  const [signInSubmitting, setSignInSubmitting] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+  const [signInSent, setSignInSent] = useState(false);
+  const [signInOtpInput, setSignInOtpInput] = useState('');
+  const [signInVerifying, setSignInVerifying] = useState(false);
+  // ---- Auth: league admins -----------------------------------------------
+  const [appAdmins, setAppAdmins] = useState<AppAdmin[]>([]);
+  const [loadingAppAdmins, setLoadingAppAdmins] = useState<boolean>(false);
+  const [appAdminsError, setAppAdminsError] = useState<string | null>(null);
+  const [showGrantLeagueAdminModal, setShowGrantLeagueAdminModal] = useState(false);
+  const [grantLeagueAdminEmailInput, setGrantLeagueAdminEmailInput] = useState('');
+  const [grantLeagueAdminSubmitting, setGrantLeagueAdminSubmitting] = useState(false);
+  const [grantLeagueAdminError, setGrantLeagueAdminError] = useState<string | null>(null);
+  // ---- Auth: grant org admin by email ------------------------------------
+  const [showGrantOrgAdminByEmailModal, setShowGrantOrgAdminByEmailModal] = useState(false);
+  const [grantOrgAdminEmailInput, setGrantOrgAdminEmailInput] = useState('');
+  const [grantOrgAdminEmailSubmitting, setGrantOrgAdminEmailSubmitting] = useState(false);
+  const [grantOrgAdminEmailError, setGrantOrgAdminEmailError] = useState<string | null>(null);
   const [currentPinInput, setCurrentPinInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
   const [editorPinInput, setEditorPinInput] = useState('');
@@ -692,6 +745,278 @@ export default function SettingsScreen() {
     return () => clearInterval(interval);
   }, [loadActiveEditors, isAdmin, currentOrg]);
 
+  const loadOrgAdmins = useCallback(async () => {
+    if (!isAdmin || !currentOrg) {
+      setOrgAdmins([]);
+      return;
+    }
+    setLoadingOrgAdmins(true);
+    setOrgAdminsError(null);
+    try {
+      const rows = await listOrgAdmins(currentOrg.id, currentOrg.ownerId);
+      setOrgAdmins(rows);
+    } catch (err) {
+      console.warn('listOrgAdmins failed', err);
+      setOrgAdminsError((err as Error).message || 'Could not load admins.');
+      setOrgAdmins([]);
+    } finally {
+      setLoadingOrgAdmins(false);
+    }
+  }, [isAdmin, currentOrg]);
+
+  useEffect(() => {
+    void loadOrgAdmins();
+  }, [loadOrgAdmins]);
+
+  const handleGrantAdmin = useCallback(async () => {
+    if (!currentOrg) return;
+    const targetId = grantUserIdInput.trim();
+    // Loose UUID v4-ish check: 8-4-4-4-12 hex blocks. The RPC re-validates,
+    // but we want to fail fast before bothering Supabase.
+    const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidLike.test(targetId)) {
+      setGrantError('User ID must be a UUID (e.g. from auth.users.id).');
+      return;
+    }
+    setGrantError(null);
+    setGrantSubmitting(true);
+    try {
+      const res = await grantOrgAdmin(currentOrg.id, targetId, {
+        adminUserId: currentOrg.ownerId,
+        name: grantNameInput.trim() || undefined,
+        email: grantEmailInput.trim() || undefined,
+      });
+      const promoted = res.previousRole !== 'admin' && res.previousRole !== 'owner';
+      Alert.alert(
+        'Admin Granted',
+        promoted
+          ? `User is now a permanent admin of ${currentOrg.name}.`
+          : `User was already ${res.previousRole}; no change needed.`,
+      );
+      setShowGrantAdminModal(false);
+      setGrantUserIdInput('');
+      setGrantNameInput('');
+      setGrantEmailInput('');
+      await loadOrgAdmins();
+    } catch (err) {
+      console.error('grantOrgAdmin failed', err);
+      setGrantError((err as Error).message || 'Could not grant admin.');
+    } finally {
+      setGrantSubmitting(false);
+    }
+  }, [currentOrg, grantUserIdInput, grantNameInput, grantEmailInput, loadOrgAdmins]);
+
+  const handleRevokeAdmin = useCallback(
+    (admin: OrgAdmin) => {
+      if (!currentOrg) return;
+      if (admin.is_owner) {
+        Alert.alert('Cannot Demote Owner', 'The org owner cannot be demoted from admin.');
+        return;
+      }
+      const who = admin.name?.trim() || admin.email?.trim() || 'this admin';
+      Alert.alert(
+        'Revoke Admin Access',
+        `Demote ${who} back to volunteer? They will lose admin powers in ${currentOrg.name} immediately.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Demote',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await revokeOrgAdmin(currentOrg.id, admin.user_id, currentOrg.ownerId);
+                await loadOrgAdmins();
+              } catch (err) {
+                console.error('revokeOrgAdmin failed', err);
+                Alert.alert('Error', (err as Error).message || 'Could not revoke admin.');
+              }
+            },
+          },
+        ],
+      );
+    },
+    [currentOrg, loadOrgAdmins],
+  );
+
+  // ---- Auth: sign in / sign out -----------------------------------------
+  const handleSendMagicLink = useCallback(async () => {
+    setSignInError(null);
+    const email = signInEmailInput.trim();
+    if (!email) {
+      setSignInError('Enter your email.');
+      return;
+    }
+    setSignInSubmitting(true);
+    try {
+      const res = await signInWithEmail(email);
+      if (res.ok) {
+        setSignInSent(true);
+        setSignInOtpInput('');
+      } else {
+        setSignInError(res.error);
+      }
+    } finally {
+      setSignInSubmitting(false);
+    }
+  }, [signInEmailInput, signInWithEmail]);
+
+  const handleVerifyOtp = useCallback(async () => {
+    setSignInError(null);
+    const email = signInEmailInput.trim();
+    // Supabase's email-OTP length is project-configurable (commonly 6 or 8).
+    // Accept up to 10 digits and let the server reject mismatches.
+    const code = signInOtpInput.replace(/\D/g, '').slice(0, 10);
+    if (code.length < 4) {
+      setSignInError('Enter the code from the email.');
+      return;
+    }
+    setSignInVerifying(true);
+    try {
+      const res = await verifyEmailOtp(email, code);
+      if (res.ok) {
+        // onAuthStateChange in AuthContext will flip authUserId and
+        // isAppAdmin asynchronously; closing the modal here is enough.
+        setShowSignInModal(false);
+        setSignInSent(false);
+        setSignInOtpInput('');
+        setSignInEmailInput('');
+      } else {
+        setSignInError(res.error);
+      }
+    } finally {
+      setSignInVerifying(false);
+    }
+  }, [signInEmailInput, signInOtpInput, verifyEmailOtp]);
+
+  const handleSignOut = useCallback(async () => {
+    Alert.alert(
+      'Sign out',
+      'Sign out of this device? You can sign back in with your email at any time.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out',
+          style: 'destructive',
+          onPress: async () => {
+            await signOut();
+          },
+        },
+      ],
+    );
+  }, [signOut]);
+
+  // ---- Auth: league admins ---------------------------------------------
+  const loadAppAdmins = useCallback(async () => {
+    if (!authUserId || !isAppAdmin) {
+      setAppAdmins([]);
+      return;
+    }
+    setLoadingAppAdmins(true);
+    setAppAdminsError(null);
+    try {
+      const rows = await listAppAdmins();
+      setAppAdmins(rows);
+    } catch (err) {
+      console.warn('listAppAdmins failed', err);
+      setAppAdminsError((err as Error).message || 'Could not load league admins.');
+      setAppAdmins([]);
+    } finally {
+      setLoadingAppAdmins(false);
+    }
+  }, [authUserId, isAppAdmin]);
+
+  useEffect(() => {
+    void loadAppAdmins();
+  }, [loadAppAdmins]);
+
+  const handleGrantLeagueAdmin = useCallback(async () => {
+    const email = grantLeagueAdminEmailInput.trim();
+    if (!email || !email.includes('@')) {
+      setGrantLeagueAdminError('Enter a valid email address.');
+      return;
+    }
+    setGrantLeagueAdminError(null);
+    setGrantLeagueAdminSubmitting(true);
+    try {
+      await grantAppAdmin(email);
+      Alert.alert(
+        'League Admin Granted',
+        `${email} is now a league admin and has admin access to every org.`,
+      );
+      setShowGrantLeagueAdminModal(false);
+      setGrantLeagueAdminEmailInput('');
+      await loadAppAdmins();
+    } catch (err) {
+      console.error('grantAppAdmin failed', err);
+      setGrantLeagueAdminError((err as Error).message || 'Could not grant league admin.');
+    } finally {
+      setGrantLeagueAdminSubmitting(false);
+    }
+  }, [grantLeagueAdminEmailInput, loadAppAdmins]);
+
+  const handleRevokeLeagueAdmin = useCallback(
+    (admin: AppAdmin) => {
+      const isSelf = admin.auth_uid === authUserId;
+      const who = admin.email || 'this admin';
+      Alert.alert(
+        isSelf ? 'Remove yourself as league admin?' : 'Remove league admin',
+        isSelf
+          ? `You will lose league admin powers immediately. Make sure another league admin can still manage the app, otherwise you'll be locked out.`
+          : `Remove ${who} from the league admin list? They keep their account; they just lose admin access to every org.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await revokeAppAdmin(admin.auth_uid);
+                if (isSelf) {
+                  await refreshAppAdminStatus();
+                }
+                await loadAppAdmins();
+              } catch (err) {
+                console.error('revokeAppAdmin failed', err);
+                Alert.alert('Error', (err as Error).message || 'Could not remove league admin.');
+              }
+            },
+          },
+        ],
+      );
+    },
+    [authUserId, loadAppAdmins, refreshAppAdminStatus],
+  );
+
+  // ---- Auth: grant org admin by email -----------------------------------
+  const handleGrantOrgAdminByEmail = useCallback(async () => {
+    if (!currentOrg) return;
+    const email = grantOrgAdminEmailInput.trim();
+    if (!email || !email.includes('@')) {
+      setGrantOrgAdminEmailError('Enter a valid email address.');
+      return;
+    }
+    setGrantOrgAdminEmailError(null);
+    setGrantOrgAdminEmailSubmitting(true);
+    try {
+      const res = await grantOrgAdminByEmail(currentOrg.id, email, currentOrg.ownerId);
+      const promoted = res.previousRole !== 'admin' && res.previousRole !== 'owner';
+      Alert.alert(
+        'Org Admin Granted',
+        promoted
+          ? `${email} is now an admin of ${currentOrg.name}.`
+          : `${email} was already ${res.previousRole}; no change needed.`,
+      );
+      setShowGrantOrgAdminByEmailModal(false);
+      setGrantOrgAdminEmailInput('');
+      await loadOrgAdmins();
+    } catch (err) {
+      console.error('grantOrgAdminByEmail failed', err);
+      setGrantOrgAdminEmailError((err as Error).message || 'Could not grant org admin.');
+    } finally {
+      setGrantOrgAdminEmailSubmitting(false);
+    }
+  }, [currentOrg, grantOrgAdminEmailInput, loadOrgAdmins]);
+
   const handleRevokeOneEditor = useCallback(
     (session: ActiveEditorSession) => {
       if (!currentOrg) return;
@@ -1153,6 +1478,76 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Account</Text>
+
+        {!isAuthLoaded ? (
+          <View style={styles.editorManagementCard}>
+            <ActivityIndicator size="small" color={Colors.primary} />
+          </View>
+        ) : authUserId ? (
+          <View style={styles.editorManagementCard}>
+            <View style={styles.editorStatusRow}>
+              <ShieldCheck size={20} color={Colors.success} />
+              <View style={styles.editorStatusContent}>
+                <Text style={styles.editorStatusTitle}>
+                  Signed in {isAppAdmin ? 'as League Admin' : ''}
+                </Text>
+                <Text style={styles.editorStatusSubtitle}>
+                  {authEmail}
+                  {isAppAdmin
+                    ? '\nYou have admin access to every org from any signed-in device.'
+                    : '\nYou are signed in but not yet a league admin. Ask an existing league admin to grant you access.'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.editorActions}>
+              <TouchableOpacity
+                style={[styles.editorActionButton, styles.editorActionDanger]}
+                onPress={handleSignOut}
+                activeOpacity={0.7}
+                testID="sign-out-button"
+              >
+                <LogOut size={18} color={Colors.error} />
+                <Text style={[styles.editorActionText, styles.editorActionTextDanger]}>
+                  Sign Out
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.editorManagementCard}>
+            <View style={styles.editorStatusRow}>
+              <Mail size={20} color={Colors.primary} />
+              <View style={styles.editorStatusContent}>
+                <Text style={styles.editorStatusTitle}>Admin Sign In</Text>
+                <Text style={styles.editorStatusSubtitle}>
+                  League admins and per-org admins sign in here with their email. You will get a magic link plus a verification code — either works. Once signed in, your admin powers follow your account, not your device.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.editorActions}>
+              <TouchableOpacity
+                style={styles.editorActionButton}
+                onPress={() => {
+                  setSignInEmailInput('');
+                  setSignInError(null);
+                  setSignInSent(false);
+                  setShowSignInModal(true);
+                }}
+                activeOpacity={0.7}
+                testID="open-sign-in-modal-button"
+              >
+                <Mail size={18} color={Colors.primary} />
+                <Text style={styles.editorActionText}>Admin Sign In</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.section}>
         <Text style={styles.sectionTitle}>Access Control</Text>
 
         {canEdit ? (
@@ -1347,6 +1742,263 @@ export default function SettingsScreen() {
         </View>
       )}
 
+      {isAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Permanent Admins</Text>
+
+          <View style={styles.editorManagementCard}>
+            <View style={styles.editorStatusRow}>
+              <ShieldCheck size={20} color={Colors.success} />
+              <View style={styles.editorStatusContent}>
+                <Text style={styles.editorStatusTitle}>Server-side admin role</Text>
+                <Text style={styles.editorStatusSubtitle}>
+                  Permanent admins are stored in the org_members table and pass the
+                  is_admin_of_org check used by every admin RPC. Unlike Editor PINs,
+                  this role does not expire — revoke it manually when you want it gone.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.editorActions}>
+              <TouchableOpacity
+                style={styles.editorActionButton}
+                onPress={() => {
+                  setGrantOrgAdminEmailInput('');
+                  setGrantOrgAdminEmailError(null);
+                  setShowGrantOrgAdminByEmailModal(true);
+                }}
+                activeOpacity={0.7}
+                testID="grant-org-admin-by-email-button"
+              >
+                <Mail size={18} color={Colors.primary} />
+                <Text style={styles.editorActionText}>Grant by Email</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.editorActionButton}
+                onPress={() => {
+                  setGrantUserIdInput('');
+                  setGrantNameInput('');
+                  setGrantEmailInput('');
+                  setGrantError(null);
+                  setShowGrantAdminModal(true);
+                }}
+                activeOpacity={0.7}
+                testID="grant-admin-button"
+              >
+                <UserPlus size={18} color={Colors.primary} />
+                <Text style={styles.editorActionText}>Grant by UUID</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.activeEditorsCard}>
+            <View style={styles.activeEditorsHeader}>
+              <View style={styles.activeEditorsTitleRow}>
+                <Shield size={18} color={Colors.text} />
+                <Text style={styles.activeEditorsTitle}>Current Admins</Text>
+                <View style={styles.activeEditorsCountPill}>
+                  <Text style={styles.activeEditorsCountText}>{orgAdmins.length}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => void loadOrgAdmins()}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                testID="refresh-org-admins"
+              >
+                <RefreshCw size={16} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {loadingOrgAdmins && orgAdmins.length === 0 ? (
+              <View style={styles.activeEditorsEmpty}>
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={styles.activeEditorsEmptyText}>Loading…</Text>
+              </View>
+            ) : orgAdminsError ? (
+              <View style={styles.activeEditorsEmpty}>
+                <Text style={styles.activeEditorsErrorText}>{orgAdminsError}</Text>
+              </View>
+            ) : orgAdmins.length === 0 ? (
+              <View style={styles.activeEditorsEmpty}>
+                <Text style={styles.activeEditorsEmptyText}>
+                  No permanent admins yet. The org owner is always treated as admin via the owner_id fallback even if no row appears here.
+                </Text>
+              </View>
+            ) : (
+              <View>
+                {orgAdmins.map((a) => {
+                  const name = a.name?.trim() || a.email?.trim() || 'Unnamed admin';
+                  const sub = a.is_owner
+                    ? 'Org owner • cannot be demoted'
+                    : `${a.role}${a.email ? ` • ${a.email}` : ''}`;
+                  return (
+                    <View key={a.member_id} style={styles.activeEditorRow} testID={`org-admin-${a.member_id}`}>
+                      <View style={styles.activeEditorAvatar}>
+                        <Text style={styles.activeEditorAvatarText}>
+                          {name.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={styles.activeEditorInfo}>
+                        <Text style={styles.activeEditorName} numberOfLines={1}>
+                          {name}
+                        </Text>
+                        <Text style={styles.activeEditorMeta} numberOfLines={1}>
+                          {sub}
+                        </Text>
+                      </View>
+                      {!a.is_owner && (
+                        <TouchableOpacity
+                          style={styles.activeEditorRevoke}
+                          onPress={() => handleRevokeAdmin(a)}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          testID={`revoke-org-admin-${a.member_id}`}
+                        >
+                          <UserX size={16} color={Colors.error} />
+                          <Text style={styles.activeEditorRevokeText}>Demote</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Info size={20} color={Colors.textSecondary} />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoTitle}>Heads up</Text>
+                <Text style={styles.infoText}>
+                  • Prefer "Grant by Email" — it ties the admin role to a real signed-in user, not a device-bound UUID.{'\n'}
+                  • The target user must have signed in once (via Account → Admin Sign In) so an account row exists for them.{'\n'}
+                  • The "Grant by UUID" path is kept for legacy / scripting use where the auth.users row doesn't exist yet.{'\n'}
+                  • For day-to-day check-in helpers, prefer Editor PINs above instead of admin grants.
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
+      {isAppAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>League Admins</Text>
+
+          <View style={styles.editorManagementCard}>
+            <View style={styles.editorStatusRow}>
+              <ShieldCheck size={20} color={Colors.success} />
+              <View style={styles.editorStatusContent}>
+                <Text style={styles.editorStatusTitle}>Top-level admin list</Text>
+                <Text style={styles.editorStatusSubtitle}>
+                  League admins have admin access to every org, automatically. This list is the orphan-proof root of the app's admin tree — keep at least one trusted person on it at all times.
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.editorActions}>
+              <TouchableOpacity
+                style={styles.editorActionButton}
+                onPress={() => {
+                  setGrantLeagueAdminEmailInput('');
+                  setGrantLeagueAdminError(null);
+                  setShowGrantLeagueAdminModal(true);
+                }}
+                activeOpacity={0.7}
+                testID="grant-league-admin-button"
+              >
+                <Mail size={18} color={Colors.primary} />
+                <Text style={styles.editorActionText}>Add League Admin</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.activeEditorsCard}>
+            <View style={styles.activeEditorsHeader}>
+              <View style={styles.activeEditorsTitleRow}>
+                <Shield size={18} color={Colors.text} />
+                <Text style={styles.activeEditorsTitle}>Current League Admins</Text>
+                <View style={styles.activeEditorsCountPill}>
+                  <Text style={styles.activeEditorsCountText}>{appAdmins.length}</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => void loadAppAdmins()}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                testID="refresh-league-admins"
+              >
+                <RefreshCw size={16} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {loadingAppAdmins && appAdmins.length === 0 ? (
+              <View style={styles.activeEditorsEmpty}>
+                <ActivityIndicator size="small" color={Colors.primary} />
+                <Text style={styles.activeEditorsEmptyText}>Loading…</Text>
+              </View>
+            ) : appAdminsError ? (
+              <View style={styles.activeEditorsEmpty}>
+                <Text style={styles.activeEditorsErrorText}>{appAdminsError}</Text>
+              </View>
+            ) : appAdmins.length === 0 ? (
+              <View style={styles.activeEditorsEmpty}>
+                <Text style={styles.activeEditorsEmptyText}>
+                  No league admins yet. The first row is bootstrapped manually via the Supabase SQL editor — see PLAN_admin_auth.md.
+                </Text>
+              </View>
+            ) : (
+              <View>
+                {appAdmins.map((a) => {
+                  const isSelf = a.auth_uid === authUserId;
+                  const sub = isSelf ? 'You' : `Added ${formatRelativeShort(new Date(a.added_at))}`;
+                  return (
+                    <View key={a.auth_uid} style={styles.activeEditorRow} testID={`league-admin-${a.auth_uid}`}>
+                      <View style={styles.activeEditorAvatar}>
+                        <Text style={styles.activeEditorAvatarText}>
+                          {a.email.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                      <View style={styles.activeEditorInfo}>
+                        <Text style={styles.activeEditorName} numberOfLines={1}>
+                          {a.email}
+                        </Text>
+                        <Text style={styles.activeEditorMeta} numberOfLines={1}>
+                          {sub}
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={styles.activeEditorRevoke}
+                        onPress={() => handleRevokeLeagueAdmin(a)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        testID={`revoke-league-admin-${a.auth_uid}`}
+                      >
+                        <UserX size={16} color={Colors.error} />
+                        <Text style={styles.activeEditorRevokeText}>Remove</Text>
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.infoCard}>
+            <View style={styles.infoRow}>
+              <Info size={20} color={Colors.textSecondary} />
+              <View style={styles.infoContent}>
+                <Text style={styles.infoTitle}>How it works</Text>
+                <Text style={styles.infoText}>
+                  • To add someone, ask them to sign in once via Account → Admin Sign In.{'\n'}
+                  • Then come back here, tap "Add League Admin", and enter their email. They are immediately admin of every org from any device they're signed in on.{'\n'}
+                  • The list cannot be emptied from this screen — to remove the last entry you must add another league admin first.
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+
       {canEdit && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Player Management</Text>
@@ -1410,9 +2062,9 @@ export default function SettingsScreen() {
             <View style={styles.cloudResultRow}>
               <CheckCircle2 size={14} color={Colors.success} />
               <Text style={styles.cloudResultText}>
-                Last run: {lastCloudSyncResult.synced.length} synced ·{' '}
-                {lastCloudSyncResult.skipped.length} skipped ·{' '}
-                {lastCloudSyncResult.failed.length} failed
+                Last run: {lastCloudSyncResult.synced?.length ?? 0} synced ·{' '}
+                {lastCloudSyncResult.merged?.length ?? 0} merged ·{' '}
+                {lastCloudSyncResult.failed?.length ?? 0} failed
               </Text>
             </View>
           )}
@@ -2683,6 +3335,405 @@ export default function SettingsScreen() {
       </Modal>
 
       <Modal
+        visible={showGrantAdminModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowGrantAdminModal(false);
+          setGrantError(null);
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Grant Permanent Admin</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowGrantAdminModal(false);
+                  setGrantError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>User ID (UUID)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="00000000-0000-0000-0000-000000000000"
+                placeholderTextColor={Colors.textMuted}
+                value={grantUserIdInput}
+                onChangeText={setGrantUserIdInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                testID="grant-admin-user-id-input"
+              />
+              <Text style={styles.modalInfoText}>
+                Find this in Supabase under Authentication → Users (the id column),
+                or in auth.users.id via SQL.
+              </Text>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Display Name (optional)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Pat Coach"
+                placeholderTextColor={Colors.textMuted}
+                value={grantNameInput}
+                onChangeText={setGrantNameInput}
+                autoCapitalize="words"
+                maxLength={80}
+              />
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Email (optional)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="pat@example.com"
+                placeholderTextColor={Colors.textMuted}
+                value={grantEmailInput}
+                onChangeText={setGrantEmailInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                maxLength={120}
+              />
+            </View>
+
+            {grantError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{grantError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.connectButton, grantSubmitting && { opacity: 0.6 }]}
+              onPress={() => void handleGrantAdmin()}
+              activeOpacity={0.7}
+              disabled={grantSubmitting}
+              testID="confirm-grant-admin"
+            >
+              {grantSubmitting ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <ShieldCheck size={20} color={Colors.white} />
+              )}
+              <Text style={styles.connectButtonText}>
+                {grantSubmitting ? 'Granting…' : 'Grant Admin'}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={styles.modalInfo}>
+              <Text style={styles.modalInfoText}>
+                The grant is recorded in org_members with role=admin. Any existing
+                row for this user is upgraded; existing email/name fields are kept
+                if already set.
+              </Text>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={showSignInModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowSignInModal(false);
+          setSignInError(null);
+          setSignInSent(false);
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Admin Sign In</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowSignInModal(false);
+                  setSignInError(null);
+                  setSignInSent(false);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {signInSent ? (
+              <>
+                <View style={styles.modalInfo}>
+                  <Text style={styles.modalInfoText}>
+                    Email sent to <Text style={{ fontWeight: '600' }}>{signInEmailInput.trim()}</Text>.
+                    {'\n\n'}
+                    Either tap the magic link in the email (returns you here automatically), or paste the verification code from the email below — both work.
+                  </Text>
+                </View>
+
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Verification code</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="123456"
+                    placeholderTextColor={Colors.textMuted}
+                    value={signInOtpInput}
+                    onChangeText={(v) => setSignInOtpInput(v.replace(/\D/g, '').slice(0, 10))}
+                    keyboardType="number-pad"
+                    autoComplete="one-time-code"
+                    textContentType="oneTimeCode"
+                    maxLength={10}
+                    testID="sign-in-otp-input"
+                  />
+                </View>
+
+                {signInError && (
+                  <View style={styles.errorContainer}>
+                    <XCircle size={18} color={Colors.error} />
+                    <Text style={styles.errorText}>{signInError}</Text>
+                  </View>
+                )}
+
+                <TouchableOpacity
+                  style={[styles.connectButton, signInVerifying && { opacity: 0.6 }]}
+                  onPress={() => void handleVerifyOtp()}
+                  activeOpacity={0.7}
+                  disabled={signInVerifying}
+                  testID="verify-otp-button"
+                >
+                  {signInVerifying ? (
+                    <ActivityIndicator size="small" color={Colors.white} />
+                  ) : (
+                    <ShieldCheck size={20} color={Colors.white} />
+                  )}
+                  <Text style={styles.connectButtonText}>
+                    {signInVerifying ? 'Verifying…' : 'Verify Code'}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.editorActionButton, { marginTop: 12 }]}
+                  onPress={() => {
+                    setSignInSent(false);
+                    setSignInOtpInput('');
+                    setSignInError(null);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.editorActionText}>Use a different email</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <>
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputLabel}>Email</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="you@example.com"
+                    placeholderTextColor={Colors.textMuted}
+                    value={signInEmailInput}
+                    onChangeText={setSignInEmailInput}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                    autoComplete="email"
+                    maxLength={120}
+                    testID="sign-in-email-input"
+                  />
+                </View>
+
+                {signInError && (
+                  <View style={styles.errorContainer}>
+                    <XCircle size={18} color={Colors.error} />
+                    <Text style={styles.errorText}>{signInError}</Text>
+                  </View>
+                )}
+
+                <TouchableOpacity
+                  style={[styles.connectButton, signInSubmitting && { opacity: 0.6 }]}
+                  onPress={() => void handleSendMagicLink()}
+                  activeOpacity={0.7}
+                  disabled={signInSubmitting}
+                  testID="send-magic-link-button"
+                >
+                  {signInSubmitting ? (
+                    <ActivityIndicator size="small" color={Colors.white} />
+                  ) : (
+                    <Mail size={20} color={Colors.white} />
+                  )}
+                  <Text style={styles.connectButtonText}>
+                    {signInSubmitting ? 'Sending…' : 'Send Magic Link'}
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={styles.modalInfo}>
+                  <Text style={styles.modalInfoText}>
+                    Only league admins (and org admins granted by email) need to sign in here. Volunteers continue to use the Editor PIN flow.
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={showGrantLeagueAdminModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowGrantLeagueAdminModal(false);
+          setGrantLeagueAdminError(null);
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add League Admin</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowGrantLeagueAdminModal(false);
+                  setGrantLeagueAdminError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Email</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="thomas@example.com"
+                placeholderTextColor={Colors.textMuted}
+                value={grantLeagueAdminEmailInput}
+                onChangeText={setGrantLeagueAdminEmailInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                maxLength={120}
+                testID="grant-league-admin-email-input"
+              />
+              <Text style={styles.modalInfoText}>
+                The user must have signed in once already (Account → Admin Sign In) so an account row exists for them.
+              </Text>
+            </View>
+
+            {grantLeagueAdminError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{grantLeagueAdminError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.connectButton, grantLeagueAdminSubmitting && { opacity: 0.6 }]}
+              onPress={() => void handleGrantLeagueAdmin()}
+              activeOpacity={0.7}
+              disabled={grantLeagueAdminSubmitting}
+              testID="confirm-grant-league-admin"
+            >
+              {grantLeagueAdminSubmitting ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <ShieldCheck size={20} color={Colors.white} />
+              )}
+              <Text style={styles.connectButtonText}>
+                {grantLeagueAdminSubmitting ? 'Granting…' : 'Add League Admin'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
+        visible={showGrantOrgAdminByEmailModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          setShowGrantOrgAdminByEmailModal(false);
+          setGrantOrgAdminEmailError(null);
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Grant Org Admin by Email</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowGrantOrgAdminByEmailModal(false);
+                  setGrantOrgAdminEmailError(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <X size={24} color={Colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Email</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="coach@example.com"
+                placeholderTextColor={Colors.textMuted}
+                value={grantOrgAdminEmailInput}
+                onChangeText={setGrantOrgAdminEmailInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="email-address"
+                maxLength={120}
+                testID="grant-org-admin-email-input"
+              />
+              <Text style={styles.modalInfoText}>
+                Grants admin of {currentOrg?.name ?? 'this org'} only. The user must have signed in once.
+              </Text>
+            </View>
+
+            {grantOrgAdminEmailError && (
+              <View style={styles.errorContainer}>
+                <XCircle size={18} color={Colors.error} />
+                <Text style={styles.errorText}>{grantOrgAdminEmailError}</Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={[styles.connectButton, grantOrgAdminEmailSubmitting && { opacity: 0.6 }]}
+              onPress={() => void handleGrantOrgAdminByEmail()}
+              activeOpacity={0.7}
+              disabled={grantOrgAdminEmailSubmitting}
+              testID="confirm-grant-org-admin-by-email"
+            >
+              {grantOrgAdminEmailSubmitting ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <ShieldCheck size={20} color={Colors.white} />
+              )}
+              <Text style={styles.connectButtonText}>
+                {grantOrgAdminEmailSubmitting ? 'Granting…' : 'Grant Org Admin'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal
         visible={showRevokeModal}
         animationType="slide"
         transparent
@@ -3121,6 +4172,58 @@ export default function SettingsScreen() {
                       Share this code with others to let them join this organization. If a tester can&apos;t join, tap &quot;Sync to Cloud&quot; above.
                     </Text>
                   </View>
+
+                  {isAdmin && (
+                    <View style={styles.orgStatusCard}>
+                      <View style={styles.orgStatusHeader}>
+                        <Text style={styles.orgStatusLabel}>STATUS</Text>
+                        <Text style={styles.orgStatusValue}>
+                          {org.isActive === false ? 'Inactive' : 'Active'}
+                        </Text>
+                      </View>
+                      <Text style={styles.orgStatusHint}>
+                        {org.isActive === false
+                          ? 'This organization is hidden from default lookups. Mark it active to bring it back.'
+                          : 'Active organizations show up in default lookups and can accept new members. Mark inactive to archive past seasons.'}
+                      </Text>
+                      <TouchableOpacity
+                        style={[
+                          styles.orgStatusToggle,
+                          org.isActive === false && styles.orgStatusToggleActivate,
+                        ]}
+                        onPress={async () => {
+                          const nextActive = !(org.isActive ?? true);
+                          const verb = nextActive ? 'activate' : 'archive';
+                          Alert.alert(
+                            nextActive ? 'Activate Organization?' : 'Archive Organization?',
+                            nextActive
+                              ? `Mark "${org.name}" as active again? It will reappear in default lookups.`
+                              : `Mark "${org.name}" as inactive? It will be hidden from default lookups but all data is preserved.`,
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: nextActive ? 'Activate' : 'Archive',
+                                style: nextActive ? 'default' : 'destructive',
+                                onPress: async () => {
+                                  const res = await setOrgActive(org.id, nextActive);
+                                  Alert.alert(
+                                    res.success ? 'Done' : `Could not ${verb}`,
+                                    res.message,
+                                  );
+                                },
+                              },
+                            ],
+                          );
+                        }}
+                        activeOpacity={0.7}
+                        testID={`toggle-active-${org.code}`}
+                      >
+                        <Text style={styles.orgStatusToggleText}>
+                          {org.isActive === false ? 'Mark Active' : 'Mark Inactive'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
 
                   <View style={styles.myOrgActions}>
                     {!isCurrent && (
@@ -5625,6 +6728,55 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600' as const,
     color: Colors.primary,
+  },
+  orgStatusCard: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  orgStatusHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+  },
+  orgStatusLabel: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+    color: Colors.textMuted,
+    letterSpacing: 0.5,
+  },
+  orgStatusValue: {
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: Colors.text,
+  },
+  orgStatusHint: {
+    marginTop: 4,
+    fontSize: 11,
+    color: Colors.textSecondary,
+    lineHeight: 15,
+  },
+  orgStatusToggle: {
+    marginTop: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    alignItems: 'center' as const,
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  orgStatusToggleActivate: {
+    backgroundColor: '#DCFCE7',
+    borderColor: '#86EFAC',
+  },
+  orgStatusToggleText: {
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: Colors.text,
   },
   currentBadge: {
     backgroundColor: Colors.primary,
