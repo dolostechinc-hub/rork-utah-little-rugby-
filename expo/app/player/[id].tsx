@@ -110,7 +110,7 @@ export default function PlayerDetailScreen() {
               await updatePlayer({
                 ...player,
                 checkedIn: false,
-                checkedInAt: undefined,
+                checkedInAt: null,
               });
               if (Platform.OS !== 'web') {
                 void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -367,7 +367,7 @@ export default function PlayerDetailScreen() {
     // RegistrationContext patches the player's photoUri to the cloud URL
     // and re-syncs through the regular cloud sync queue.
     const checkedIn = true;
-    const finalAgeGroup = playUpAgeGroup || player.ageGroup || calculatedAgeGroup;
+    const finalAgeGroup = playUpAgeGroup || player.ageGroup || calculatedAgeGroup || "";
     const isLocalPhoto = !!photoUri && !photoUri.startsWith('http');
 
     try {
@@ -878,7 +878,7 @@ export default function PlayerDetailScreen() {
           onClose={() => setShowTeamModal(false)}
           currentTeamName={player.teamName}
           playerClub={player.club}
-          playerAgeGroup={playUpAgeGroup || player.ageGroup || calculatedAgeGroup}
+          playerAgeGroup={playUpAgeGroup || player.ageGroup || calculatedAgeGroup || ""}
           allTeams={teams}
           onSelect={async (teamName) => {
             setIsSavingTeam(true);
