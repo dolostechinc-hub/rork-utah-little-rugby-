@@ -36,6 +36,7 @@ import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
 import WeightRestrictionModal from '@/components/WeightRestrictionModal';
 import TeamAssignmentModal from '@/components/TeamAssignmentModal';
+import { formatTeamAssignments } from '@/utils/teamAssignments';
 import {
   calculateAgeGroup,
   checkWeightRestriction,
@@ -43,6 +44,11 @@ import {
   getRestrictionStatusColor,
   getNextAgeGroup,
 } from '@/utils/playerUtils';
+
+function ageGroupRank(ageGroup: string | null | undefined): number | null {
+  const match = (ageGroup || '').match(/\d{1,2}/);
+  return match ? parseInt(match[0], 10) : null;
+}
 
 export default function PlayerDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -52,12 +58,13 @@ export default function PlayerDetailScreen() {
     updatePlayer,
     isUpdating,
     teams,
+    ageGroups,
     isPreviouslyAgeVerified,
     showTeamAssignment,
     enqueuePhotoUpload,
     flushPhotoQueueNow,
   } = useRegistration();
-  const { canEdit } = useAuth();
+  const { canEdit, isAdmin } = useAuth();
 
   const scrollRef = useRef<ScrollView | null>(null);
   const weightInputRef = useRef<TextInput | null>(null);
@@ -75,6 +82,7 @@ export default function PlayerDetailScreen() {
   // option so coaches can also clear the restriction.
   const [restrictionModalMode, setRestrictionModalMode] = useState<'overweight' | 'voluntary'>('overweight');
   const [playUpAgeGroup, setPlayUpAgeGroup] = useState<string | null>(null);
+  const [isSavingAgeGroup, setIsSavingAgeGroup] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isRegisteringWeight, setIsRegisteringWeight] = useState(false);
   const [weightRegistered, setWeightRegistered] = useState(false);
@@ -166,7 +174,10 @@ export default function PlayerDetailScreen() {
     return calculateAgeGroup(player.dateOfBirth);
   }, [player?.dateOfBirth]);
 
-  const effectiveAgeGroup = calculatedAgeGroup || player?.ageGroup || '';
+  // `ageGroup` is the intentional roster placement and must win over the
+  // DOB-derived `calculatedAgeGroup` so admin waivers/play-down overrides
+  // made in the app or directly in Supabase do not get overwritten on save.
+  const effectiveAgeGroup = player?.ageGroup || calculatedAgeGroup || '';
 
   const handleWeightChange = (newWeight: string) => {
     setWeight(newWeight);
@@ -185,7 +196,7 @@ export default function PlayerDetailScreen() {
       // weight, and updating the weight should never silently undo
       // that election. Clearing back to 'none' is a deliberate action
       // taken from the Special Placement card below.
-      if (restriction.isOverweight && restriction.limit) {
+      if (restriction.isOverweight && restriction.limit && !playsUp && restrictionStatus === 'none') {
         setPendingWeight(newWeight);
         setRestrictionModalMode('overweight');
         setShowWeightModal(true);
@@ -205,6 +216,13 @@ export default function PlayerDetailScreen() {
       if (nextAgeGroup) {
         console.log(`Moving player from ${effectiveAgeGroup} to ${nextAgeGroup}`);
         setPlayUpAgeGroup(nextAgeGroup);
+        // Playing up resolves the restricted-weight popup by moving the kid
+        // into the next age bracket. It is not a contact restriction, so keep
+        // restriction_status='none' and close the forced overweight prompt.
+        setRestrictionStatus('none');
+        if (restrictionModalMode === 'overweight') {
+          setShowWeightModal(false);
+        }
       }
     } else {
       setPlayUpAgeGroup(null);
@@ -297,6 +315,7 @@ export default function PlayerDetailScreen() {
         weight: trimmed,
         restrictionStatus,
         playsUp,
+        ageGroup: playsUp && playUpAgeGroup ? playUpAgeGroup : player.ageGroup,
         calculatedAgeGroup: calculatedAgeGroup || undefined,
       });
 
@@ -348,7 +367,7 @@ export default function PlayerDetailScreen() {
     // RegistrationContext patches the player's photoUri to the cloud URL
     // and re-syncs through the regular cloud sync queue.
     const checkedIn = true;
-    const finalAgeGroup = playUpAgeGroup || calculatedAgeGroup || player.ageGroup;
+    const finalAgeGroup = playUpAgeGroup || player.ageGroup || calculatedAgeGroup;
     const isLocalPhoto = !!photoUri && !photoUri.startsWith('http');
 
     try {
@@ -469,7 +488,7 @@ export default function PlayerDetailScreen() {
               </View>
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>
-                  {playUpAgeGroup || calculatedAgeGroup || player.ageGroup}
+                  {playUpAgeGroup || player.ageGroup || calculatedAgeGroup}
                   {playUpAgeGroup && ' ↑'}
                 </Text>
               </View>
@@ -479,7 +498,7 @@ export default function PlayerDetailScreen() {
               {player.teamName && showTeamAssignment ? (
                 <View style={[styles.badge, styles.teamBadge]}>
                   <Users size={12} color={Colors.white} />
-                  <Text style={[styles.badgeText, styles.teamBadgeText]}>{player.teamName}</Text>
+                  <Text style={[styles.badgeText, styles.teamBadgeText]}>{formatTeamAssignments(player.teamName)}</Text>
                 </View>
               ) : null}
             </View>
@@ -516,6 +535,81 @@ export default function PlayerDetailScreen() {
 
           </View>
 
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Roster Placement</Text>
+
+            <View style={styles.detailRow}>
+              <Shield size={18} color={Colors.textSecondary} />
+              <Text style={styles.detailLabel}>Roster Age Group</Text>
+              <Text style={styles.detailValue}>{player.ageGroup || 'Not assigned'}</Text>
+            </View>
+
+            {calculatedAgeGroup && calculatedAgeGroup !== player.ageGroup && (
+              <View style={[styles.ageGroupNote, styles.ageGroupOverrideNote]}>
+                <Text style={[styles.ageGroupNoteText, styles.ageGroupOverrideNoteText]}>
+                  Admin override: DOB calculates as {calculatedAgeGroup}, rostered as {player.ageGroup}.
+                </Text>
+              </View>
+            )}
+
+            {isAdmin && (
+              <View style={styles.ageOverrideCard}>
+                <Text style={styles.ageOverrideTitle}>Admin Age Group Override</Text>
+                <Text style={styles.ageOverrideHelp}>
+                  Use for approved play-down/play-up waivers. This saves the roster age group and keeps the DOB-calculated age for reference.
+                </Text>
+                <View style={styles.ageOverrideChips}>
+                  {ageGroups.map((group) => {
+                    const isSelected = group.name === player.ageGroup;
+                    return (
+                      <TouchableOpacity
+                        key={group.id || group.name}
+                        style={[styles.ageOverrideChip, isSelected && styles.ageOverrideChipActive]}
+                        disabled={isSavingAgeGroup || isSelected}
+                        onPress={async () => {
+                          setIsSavingAgeGroup(true);
+                          try {
+                            const selectedRank = ageGroupRank(group.name);
+                            const calculatedRank = ageGroupRank(calculatedAgeGroup);
+                            const nextPlaysUp =
+                              selectedRank !== null && calculatedRank !== null
+                                ? selectedRank > calculatedRank
+                                : false;
+                            setPlaysUp(nextPlaysUp);
+                            setPlayUpAgeGroup(nextPlaysUp ? group.name : null);
+                            setRestrictionStatus('none');
+                            await updatePlayer({
+                              ...player,
+                              ageGroup: group.name,
+                              playsUp: nextPlaysUp,
+                              restrictionStatus: 'none',
+                              calculatedAgeGroup: calculatedAgeGroup || undefined,
+                            });
+                            if (Platform.OS !== 'web') {
+                              void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            }
+                          } catch (error) {
+                            console.error('Failed to save age group override:', error);
+                            const message = error instanceof Error ? error.message : 'Unknown error';
+                            Alert.alert('Could Not Save Age Group', message);
+                          } finally {
+                            setIsSavingAgeGroup(false);
+                          }
+                        }}
+                        testID={`age-override-${group.name}`}
+                      >
+                        <Text style={[styles.ageOverrideChipText, isSelected && styles.ageOverrideChipTextActive]}>
+                          {group.name}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {isSavingAgeGroup && <Text style={styles.ageOverrideSaving}>Saving age group…</Text>}
+              </View>
+            )}
+          </View>
+
           {canEdit && showTeamAssignment && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Team Assignment</Text>
@@ -529,12 +623,12 @@ export default function PlayerDetailScreen() {
                 <Users size={22} color={Colors.primary} />
                 <View style={styles.teamCardContent}>
                   <Text style={styles.teamCardLabel}>
-                    {player.teamName ? 'Assigned Team' : 'No Team Assigned'}
+                    {player.teamName ? 'Assigned Teams' : 'No Teams Assigned'}
                   </Text>
                   <Text style={styles.teamCardValue}>
                     {isSavingTeam
                       ? 'Saving…'
-                      : player.teamName || `Tap to assign (e.g. ${player.club} ${player.ageGroup} Blue)`}
+                      : formatTeamAssignments(player.teamName) || `Tap to assign (e.g. ${player.club} ${player.ageGroup} Blue)`}
                   </Text>
                 </View>
                 <ChevronRight size={20} color={Colors.textMuted} />
@@ -784,10 +878,9 @@ export default function PlayerDetailScreen() {
           onClose={() => setShowTeamModal(false)}
           currentTeamName={player.teamName}
           playerClub={player.club}
-          playerAgeGroup={playUpAgeGroup || calculatedAgeGroup || player.ageGroup}
+          playerAgeGroup={playUpAgeGroup || player.ageGroup || calculatedAgeGroup}
           allTeams={teams}
           onSelect={async (teamName) => {
-            setShowTeamModal(false);
             setIsSavingTeam(true);
             try {
               console.log('Saving team assignment for player:', player.id, '->', teamName);
@@ -804,7 +897,6 @@ export default function PlayerDetailScreen() {
             }
           }}
           onClear={async () => {
-            setShowTeamModal(false);
             setIsSavingTeam(true);
             try {
               console.log('Clearing team assignment for player:', player.id);
@@ -1165,6 +1257,62 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.warning,
     fontWeight: '500' as const,
+  },
+  ageGroupOverrideNote: {
+    backgroundColor: '#EDE9FE',
+  },
+  ageGroupOverrideNoteText: {
+    color: '#7C3AED',
+  },
+  ageOverrideCard: {
+    marginTop: 12,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  ageOverrideTitle: {
+    fontSize: 14,
+    fontWeight: '700' as const,
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  ageOverrideHelp: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    lineHeight: 17,
+    marginBottom: 10,
+  },
+  ageOverrideChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  ageOverrideChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  ageOverrideChipActive: {
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
+  },
+  ageOverrideChipText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: Colors.textSecondary,
+  },
+  ageOverrideChipTextActive: {
+    color: Colors.primary,
+  },
+  ageOverrideSaving: {
+    marginTop: 8,
+    fontSize: 12,
+    color: Colors.textSecondary,
   },
   restrictionCard: {
     flexDirection: 'row',
