@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { X, Users, Plus, Check } from 'lucide-react-native';
 import Colors from '@/constants/colors';
+import { parseTeamAssignments, serializeTeamAssignments } from '@/utils/teamAssignments';
 
 export interface TeamOption {
   id: string;
@@ -43,6 +44,13 @@ export default function TeamAssignmentModal({
   allTeams,
 }: TeamAssignmentModalProps) {
   const [customName, setCustomName] = useState<string>('');
+  const [selectedNames, setSelectedNames] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (visible) {
+      setSelectedNames(parseTeamAssignments(currentTeamName));
+    }
+  }, [currentTeamName, visible]);
 
   const normalizeAge = (s: string | undefined | null) =>
     (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
@@ -82,15 +90,21 @@ export default function TeamAssignmentModal({
     (name: string) => {
       const trimmed = name.trim();
       if (!trimmed) return;
-      console.log('[TeamAssignment] selecting team:', trimmed);
-      onSelect(trimmed);
+      const exists = selectedNames.some((teamName) => teamName.toLowerCase() === trimmed.toLowerCase());
+      const next = exists
+        ? selectedNames.filter((teamName) => teamName.toLowerCase() !== trimmed.toLowerCase())
+        : [...selectedNames, trimmed];
+      console.log('[TeamAssignment] toggling team:', trimmed, 'next:', next);
+      setSelectedNames(next);
+      onSelect(serializeTeamAssignments(next));
       setCustomName('');
     },
-    [onSelect],
+    [onSelect, selectedNames],
   );
 
   const handleClear = useCallback(() => {
     console.log('[TeamAssignment] clearing team');
+    setSelectedNames([]);
     onClear();
     setCustomName('');
   }, [onClear]);
@@ -109,7 +123,7 @@ export default function TeamAssignmentModal({
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Users size={22} color={Colors.primary} />
-            <Text style={styles.headerTitle}>Assign Team</Text>
+            <Text style={styles.headerTitle}>Assign Teams</Text>
           </View>
           <TouchableOpacity onPress={onClose} style={styles.closeBtn} testID="team-assign-close">
             <X size={22} color={Colors.text} />
@@ -124,20 +138,20 @@ export default function TeamAssignmentModal({
           <Text style={styles.contextValue}>{playerAgeGroup || '—'}</Text>
         </View>
 
-        {currentTeamName ? (
+        {selectedNames.length > 0 ? (
           <View style={styles.currentCard}>
             <View style={{ flex: 1 }}>
               <Text style={styles.currentLabel}>Currently Assigned</Text>
-              <Text style={styles.currentName}>{currentTeamName}</Text>
+              <Text style={styles.currentName}>{selectedNames.join(', ')}</Text>
             </View>
             <TouchableOpacity onPress={handleClear} style={styles.clearBtn} testID="team-assign-clear">
-              <Text style={styles.clearBtnText}>Remove</Text>
+              <Text style={styles.clearBtnText}>Remove All</Text>
             </TouchableOpacity>
           </View>
         ) : null}
 
         <View style={styles.inputSection}>
-          <Text style={styles.sectionLabel}>Create or Type Team Name</Text>
+          <Text style={styles.sectionLabel}>Add Custom Team Name</Text>
           <View style={styles.inputRow}>
             <TextInput
               style={styles.input}
@@ -158,7 +172,7 @@ export default function TeamAssignmentModal({
               testID="team-assign-save"
             >
               <Plus size={18} color={Colors.white} />
-              <Text style={styles.addBtnText}>Assign</Text>
+              <Text style={styles.addBtnText}>Add</Text>
             </TouchableOpacity>
           </View>
 
@@ -182,7 +196,7 @@ export default function TeamAssignmentModal({
           <Text style={styles.sectionLabel}>Existing Teams</Text>
           <Text style={styles.listHeaderHint}>
             {suggestedTeams.length > 0
-              ? `${suggestedTeams.length} match this club + age`
+              ? `${suggestedTeams.length} match — tap multiple`
               : 'No matching teams yet'}
           </Text>
         </View>
@@ -193,7 +207,9 @@ export default function TeamAssignmentModal({
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) => {
-            const isCurrent = (currentTeamName || '').trim().toLowerCase() === item.name.trim().toLowerCase();
+            const isCurrent = selectedNames.some(
+              (teamName) => teamName.toLowerCase() === item.name.trim().toLowerCase(),
+            );
             return (
               <TouchableOpacity
                 style={[styles.teamRow, isCurrent && styles.teamRowActive]}

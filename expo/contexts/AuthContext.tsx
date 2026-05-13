@@ -90,7 +90,13 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       setIsAuthLoaded(true);
     };
 
-    void supabase.auth.getSession().then(({ data }) => applySession(data?.session ?? null));
+    void supabase.auth
+      .getSession()
+      .then(({ data }) => applySession(data?.session ?? null))
+      .catch((err) => {
+        console.warn('[auth] getSession failed:', err);
+        if (!cancelled) setIsAuthLoaded(true);
+      });
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       console.log('[auth] supabase auth event:', event);
@@ -230,7 +236,15 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
         if (storedAdminPin) setAdminPinState(storedAdminPin);
 
-        const session = await loadEditorSession();
+        const session = await loadEditorSession({ validateRemote: false });
+
+        if (session) {
+          // Validate in the background. If the server explicitly says this
+          // session was revoked, editorSession subscribers will drop the role;
+          // a slow/offline network is treated as transient and keeps the local
+          // session until expiresAt.
+          void loadEditorSession({ timeoutMs: 6000 });
+        }
 
         if (storedAuthState) {
           const authState: AuthState = JSON.parse(storedAuthState);

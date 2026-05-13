@@ -30,6 +30,7 @@ import FilterDropdown from '@/components/FilterDropdown';
 import SyncStatusBadge from '@/components/SyncStatusBadge';
 import Colors from '@/constants/colors';
 import { Player, RestrictionStatus } from '@/types';
+import { playerHasTeam } from '@/utils/teamAssignments';
 import { getRestrictionStatusLabel, getRestrictionStatusColor } from '@/utils/playerUtils';
 
 // Don't re-pull the cloud roster on every focus event -- tab-switching
@@ -92,7 +93,7 @@ export default function RosterScreen() {
       const normalizeAge = (s: string) => s.toUpperCase().replace(/\s+/g, '').replace(/^(\d+)U$/, 'U$1');
       const target = normalizeAge(selectedAgeGroup);
       result = result.filter(p => {
-        const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup || '';
+        const effectiveAgeGroup = p.ageGroup || p.calculatedAgeGroup || '';
         return normalizeAge(effectiveAgeGroup) === target;
       });
     }
@@ -102,7 +103,7 @@ export default function RosterScreen() {
       result = result.filter(p => normalizeDiv(p.division || '') === target);
     }
     if (selectedTeamName) {
-      result = result.filter(p => p.teamName === selectedTeamName);
+      result = result.filter(p => playerHasTeam(p.teamName, selectedTeamName));
     }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim();
@@ -191,7 +192,7 @@ export default function RosterScreen() {
           <View style={styles.playerMeta}>
             <Text style={styles.playerClub}>{item.club}</Text>
             <Text style={styles.metaDot}>•</Text>
-            <Text style={styles.playerAge}>{item.calculatedAgeGroup || item.ageGroup}</Text>
+            <Text style={styles.playerAge}>{item.ageGroup || item.calculatedAgeGroup}</Text>
             <Text style={styles.metaDot}>•</Text>
             <Text style={styles.playerDivision}>{item.division}</Text>
           </View>

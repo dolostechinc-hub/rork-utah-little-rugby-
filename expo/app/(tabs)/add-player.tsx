@@ -108,7 +108,9 @@ export default function AddPlayerScreen() {
     }
   }, [calculatedAgeGroup, ageGroup]);
 
-  const effectiveAgeGroup = calculatedAgeGroup || ageGroup || '';
+  // `ageGroup` is the intentional roster placement. It can be manually
+  // changed for admin waivers, so do not let the DOB calculation overwrite it.
+  const effectiveAgeGroup = ageGroup || calculatedAgeGroup || '';
 
   const handleWeightChange = (newWeight: string) => {
     setWeight(newWeight);
@@ -127,7 +129,7 @@ export default function AddPlayerScreen() {
     );
 
     if (restriction.isOverweight && restriction.limit) {
-      if (restrictionStatus === 'none') {
+      if (restrictionStatus === 'none' && !playsUp) {
         console.log('[add-player] weight over limit, prompting restriction modal', {
           weight,
           limit: restriction.limit,
@@ -143,7 +145,7 @@ export default function AddPlayerScreen() {
         setPlayUpAgeGroup(null);
       }
     }
-  }, [weight, division, effectiveAgeGroup, showWeightModal, restrictionStatus]);
+  }, [weight, division, effectiveAgeGroup, showWeightModal, restrictionStatus, playsUp]);
 
   const handleRestrictionSelect = (status: RestrictionStatus) => {
     setRestrictionStatus(status);
@@ -157,7 +159,11 @@ export default function AddPlayerScreen() {
       if (nextAgeGroup) {
         console.log(`Moving player from ${effectiveAgeGroup} to ${nextAgeGroup}`);
         setPlayUpAgeGroup(nextAgeGroup);
-        setAgeGroup(nextAgeGroup);
+        // Playing up resolves the restricted-weight popup by moving the kid
+        // into the next age bracket. It is not a contact restriction, so the
+        // row should save as plays_up=true + restriction_status='none'.
+        setRestrictionStatus('none');
+        setShowWeightModal(false);
       }
     } else {
       setPlayUpAgeGroup(null);
@@ -281,7 +287,7 @@ export default function AddPlayerScreen() {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         club: club || '',
-        ageGroup: playUpAgeGroup || calculatedAgeGroup || ageGroup || '',
+        ageGroup: playUpAgeGroup || ageGroup || calculatedAgeGroup || '',
         division: division || '',
         teamName: '',
         dateOfBirth: dateOfBirth.trim(),
@@ -372,7 +378,7 @@ export default function AddPlayerScreen() {
                 />
                 {calculatedAgeGroup ? (
                   <Text style={styles.ageGroupHint}>
-                    {`Age Group: ${playUpAgeGroup || calculatedAgeGroup}${playUpAgeGroup ? ' (Playing Up)' : ''}`}
+                    {`Age Group: ${playUpAgeGroup || ageGroup || calculatedAgeGroup}${playUpAgeGroup ? ' (Playing Up)' : ''}`}
                   </Text>
                 ) : null}
               </View>

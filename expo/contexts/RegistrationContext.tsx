@@ -55,6 +55,7 @@ import {
   subscribeOrgEventMode,
 } from '@/lib/eventModeSync';
 import { fetchSheetCsv, parseCSV } from '@/lib/googleSheetsCsv';
+import { parseTeamAssignments, playerHasTeam } from '@/utils/teamAssignments';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -1880,15 +1881,17 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
     // 3. Add teams from player data
     players.forEach(player => {
-      if (player.teamName && !uniqueTeams.has(player.teamName)) {
-        uniqueTeams.set(player.teamName, {
-          id: `team-${player.teamName.toLowerCase().replace(/\s+/g, '-')}`,
-          name: player.teamName,
-          club: player.club,
-          ageGroup: player.ageGroup,
-          division: player.division
-        });
-      }
+      parseTeamAssignments(player.teamName).forEach((teamName) => {
+        if (teamName && !uniqueTeams.has(teamName)) {
+          uniqueTeams.set(teamName, {
+            id: `team-${teamName.toLowerCase().replace(/\s+/g, '-')}`,
+            name: teamName,
+            club: player.club,
+            ageGroup: player.ageGroup,
+            division: player.division
+          });
+        }
+      });
     });
 
     return Array.from(uniqueTeams.values()).sort((a, b) => 
@@ -1950,7 +1953,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     if (filters.ageGroup) {
       const target = normalizeAge(filters.ageGroup);
       result = result.filter(p => {
-        const effectiveAgeGroup = p.calculatedAgeGroup || p.ageGroup || '';
+        const effectiveAgeGroup = p.ageGroup || p.calculatedAgeGroup || '';
         return normalizeAge(effectiveAgeGroup) === target;
       });
       console.log('[Filter] after age filter:', result.length, 'target:', target);
@@ -1961,8 +1964,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('[Filter] after division filter:', result.length);
     }
     if (filters.teamName) {
-      const target = normalizeStr(filters.teamName);
-      result = result.filter(p => normalizeStr(p.teamName) === target);
+      result = result.filter(p => playerHasTeam(p.teamName, filters.teamName));
     }
     if (filters.status === 'checkedIn') {
       result = result.filter(p => p.checkedIn);
