@@ -6,6 +6,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   name: 'Utah Little Rugby',
   slug: 'utah-little-rugby',
   version: '3.2.2',
+  runtimeVersion: {
+    policy: 'appVersion',
+  },
+  updates: {
+    url: 'https://u.expo.dev/f7899347-aa05-47e8-91ef-49efdf33a996',
+  },
   orientation: 'portrait',
   icon: './assets/images/icon.png',
   scheme: 'utah-little-rugby',
