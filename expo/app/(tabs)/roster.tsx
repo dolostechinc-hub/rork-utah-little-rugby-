@@ -317,7 +317,13 @@ export default function RosterScreen() {
             <FilterDropdown
               label="Club"
               value={selectedClub}
-              options={clubs}
+              options={Array.from(
+  new Set(
+    players
+      .map(p => p.club?.trim())
+      .filter((club): club is string => Boolean(club))
+  )
+).sort()}
               onSelect={(val) => {
                 setSelectedClub(val);
                 // Clear team if it doesn't belong to the new club
