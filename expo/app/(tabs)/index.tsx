@@ -32,6 +32,7 @@ export default function CheckInScreen() {
   const insets = useSafeAreaInsets();
   const {
     filteredPlayers,
+    players,
     filters,
     setFilters,
     searchQuery,
@@ -47,6 +48,18 @@ export default function CheckInScreen() {
   } = useRegistration();
 
   const [refreshing, setRefreshing] = React.useState(false);
+
+  const playerClubOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          players
+            .map((p) => p.club?.trim())
+            .filter((club): club is string => Boolean(club)),
+        ),
+      ).sort(),
+    [players],
+  );
 
   // Cascade team options based on selected club, age group, and division
   const teamNames = useMemo(() => {
@@ -119,7 +132,7 @@ export default function CheckInScreen() {
           <FilterDropdown
             label="Club"
             value={filters.club}
-            options={clubs}
+            options={playerClubOptions}
             onSelect={(value) => setFilters({ ...filters, club: value })}
             placeholder="All Clubs"
             labelColor={Colors.white}
