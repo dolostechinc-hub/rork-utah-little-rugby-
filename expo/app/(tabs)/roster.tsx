@@ -42,12 +42,40 @@ const REFRESH_ON_FOCUS_DEBOUNCE_MS = 10_000;
 const ItemSeparator = React.memo(() => <View style={separatorStyle.separator} />);
 const separatorStyle = StyleSheet.create({ separator: { height: 1, backgroundColor: Colors.border, marginLeft: 56 } });
 
+const CLUB_ALIASES: Record<string, string> = {
+  'cache valley pirates': 'Cache Valley',
+  'mountain ridge black': 'Mountain Ridge',
+  mvp: 'Mountain Valley Powerhouse',
+  provo: 'Provo Steelers',
+  richfield: 'Richfield Broncos',
+  westlake: 'Westlake Drua',
+};
+
+function canonicalClubName(club: string | null | undefined): string {
+  const stripped = (club || '')
+    .toString()
+    .trim()
+    .replace(/^little\s+/i, '')
+    .replace(/\s+/g, ' ');
+
+  if (!stripped) return '';
+  return CLUB_ALIASES[stripped.toLowerCase()] ?? stripped;
+}
+
+function displayClubName(club: string | null | undefined): string {
+  const canonical = canonicalClubName(club);
+  return canonical ? `Little ${canonical}` : '';
+}
+
+function clubFilterKey(club: string | null | undefined): string {
+  return canonicalClubName(club).toLowerCase();
+}
+
 export default function RosterScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const {
     players,
-    clubs,
     teams,
     ageGroups,
     divisions,
@@ -83,11 +111,24 @@ export default function RosterScreen() {
   const [showFilters, setShowFilters] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
+  const rosterClubOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          players
+            .map((p) => displayClubName(p.club))
+            .filter((club): club is string => Boolean(club)),
+        ),
+      ).sort(),
+    [players],
+  );
+
   const filteredPlayers = useMemo(() => {
     let result = players;
 
     if (selectedClub) {
-      result = result.filter(p => p.club === selectedClub);
+      const target = clubFilterKey(selectedClub);
+      result = result.filter(p => clubFilterKey(p.club) === target);
     }
     if (selectedAgeGroup) {
       const normalizeAge = (s: string) => s.toUpperCase().replace(/\s+/g, '').replace(/^(\d+)U$/, 'U$1');
@@ -228,12 +269,12 @@ export default function RosterScreen() {
       (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
     const normalize = (s: string | null | undefined) => (s || '').toString().trim().toLowerCase();
 
-    const targetClub = normalize(selectedClub);
+    const targetClub = clubFilterKey(selectedClub);
     const targetAge = normalizeAge(selectedAgeGroup);
     const targetDivision = normalize(selectedDivision);
 
     const filtered = teamNames.filter((t) => {
-      if (targetClub && normalize(t.club) !== targetClub) return false;
+      if (targetClub && clubFilterKey(t.club) !== targetClub) return false;
       if (targetAge && normalizeAge(t.ageGroup) !== targetAge) return false;
       if (targetDivision && normalize(t.division) !== targetDivision) return false;
       return true;
@@ -317,13 +358,7 @@ export default function RosterScreen() {
             <FilterDropdown
               label="Club"
               value={selectedClub}
-              options={Array.from(
-  new Set(
-    players
-      .map(p => p.club?.trim())
-      .filter((club): club is string => Boolean(club))
-  )
-).sort()}
+              options={rosterClubOptions}
               onSelect={(val) => {
                 setSelectedClub(val);
                 // Clear team if it doesn't belong to the new club

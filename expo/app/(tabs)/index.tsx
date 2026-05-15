@@ -28,23 +28,48 @@ const STATUS_FILTER_OPTIONS = [
   { id: 'checkedIn', name: 'Checked In' },
 ];
 
+const CLUB_ALIASES: Record<string, string> = {
+  'cache valley pirates': 'Cache Valley',
+  'mountain ridge black': 'Mountain Ridge',
+  mvp: 'Mountain Valley Powerhouse',
+  provo: 'Provo Steelers',
+  richfield: 'Richfield Broncos',
+  westlake: 'Westlake Drua',
+};
+
+function canonicalClubName(club: string | null | undefined): string {
+  const stripped = (club || '')
+    .toString()
+    .trim()
+    .replace(/^little\s+/i, '')
+    .replace(/\s+/g, ' ');
+
+  if (!stripped) return '';
+  return CLUB_ALIASES[stripped.toLowerCase()] ?? stripped;
+}
+
+function displayClubName(club: string | null | undefined): string {
+  const canonical = canonicalClubName(club);
+  return canonical ? `Little ${canonical}` : '';
+}
+
+function clubFilterKey(club: string | null | undefined): string {
+  return canonicalClubName(club).toLowerCase();
+}
+
 export default function CheckInScreen() {
   const insets = useSafeAreaInsets();
   const {
-    filteredPlayers,
     players,
     filters,
     setFilters,
     searchQuery,
     setSearchQuery,
-    clubs,
     teams,
     ageGroups,
     divisions,
     isLoading,
-    stats,
     refreshData,
-    isFetching,
   } = useRegistration();
 
   const [refreshing, setRefreshing] = React.useState(false);
@@ -54,12 +79,67 @@ export default function CheckInScreen() {
       Array.from(
         new Set(
           players
-            .map((p) => p.club?.trim())
+            .map((p) => displayClubName(p.club))
             .filter((club): club is string => Boolean(club)),
         ),
       ).sort(),
     [players],
   );
+
+  const filteredPlayers = useMemo(() => {
+    let result = players;
+
+    const normalizeStr = (v: string | undefined | null) => (v || '').toString().trim().toLowerCase();
+    const normalizeAge = (v: string | undefined | null): string => {
+      const raw = (v || '').toString().toUpperCase();
+      if (!raw.trim()) return '';
+      const match = raw.match(/(\d{1,2})/);
+      if (match) return `U${parseInt(match[1], 10)}`;
+      return raw.replace(/\s+/g, '');
+    };
+
+    if (filters.club) {
+      const target = clubFilterKey(filters.club);
+      result = result.filter((p) => clubFilterKey(p.club) === target);
+    }
+    if (filters.ageGroup) {
+      const target = normalizeAge(filters.ageGroup);
+      result = result.filter((p) => normalizeAge(p.ageGroup || p.calculatedAgeGroup || '') === target);
+    }
+    if (filters.division) {
+      const target = normalizeStr(filters.division);
+      result = result.filter((p) => normalizeStr(p.division) === target);
+    }
+    if (filters.teamName) {
+      result = result.filter((p) => playerHasTeam(p.teamName, filters.teamName));
+    }
+    if (filters.status === 'checkedIn') {
+      result = result.filter((p) => p.checkedIn);
+    } else if (filters.status === 'pending') {
+      result = result.filter((p) => !p.checkedIn);
+    }
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      result = result.filter(
+        (p) =>
+          p.firstName.toLowerCase().includes(query) ||
+          p.lastName.toLowerCase().includes(query) ||
+          `${p.firstName} ${p.lastName}`.toLowerCase().includes(query) ||
+          displayClubName(p.club).toLowerCase().includes(query),
+      );
+    }
+
+    return result.sort((a, b) => {
+      if (a.checkedIn !== b.checkedIn) return a.checkedIn ? 1 : -1;
+      return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`);
+    });
+  }, [players, filters, searchQuery]);
+
+  const stats = useMemo(() => {
+    const total = filteredPlayers.length;
+    const checkedIn = filteredPlayers.filter((p) => p.checkedIn).length;
+    return { total, checkedIn, pending: total - checkedIn };
+  }, [filteredPlayers]);
 
   // Cascade team options based on selected club, age group, and division
   const teamNames = useMemo(() => {
@@ -67,12 +147,12 @@ export default function CheckInScreen() {
       (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
     const normalize = (s: string | null | undefined) => (s || '').toString().trim().toLowerCase();
 
-    const targetClub = normalize(filters.club);
+    const targetClub = clubFilterKey(filters.club);
     const targetAge = normalizeAge(filters.ageGroup);
     const targetDivision = normalize(filters.division);
 
     const filtered = teams.filter((t) => {
-      if (targetClub && normalize(t.club) !== targetClub) return false;
+      if (targetClub && clubFilterKey(t.club) !== targetClub) return false;
       if (targetAge && normalizeAge(t.ageGroup) !== targetAge) return false;
       if (targetDivision && normalize(t.division) !== targetDivision) return false;
       return true;
