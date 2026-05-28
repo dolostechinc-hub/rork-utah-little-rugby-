@@ -20,6 +20,7 @@ import CloudSyncBanner from '@/components/CloudSyncBanner';
 import OrgMovedBanner from '@/components/OrgMovedBanner';
 import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
+import { useRouter } from 'expo-router';
 
 // FilterDropdown identifies its rows by `id` and surfaces `name` to the
 // user. The names here are matched against in the onSelect handler to
@@ -60,6 +61,7 @@ function clubFilterKey(club: string | null | undefined): string {
 
 export default function CheckInScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const {
     players,
     filters,
