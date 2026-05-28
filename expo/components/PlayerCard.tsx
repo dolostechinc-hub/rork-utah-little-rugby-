@@ -1,9 +1,10 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import { CheckCircle2, Circle, Camera, User } from 'lucide-react-native';
+import { CheckCircle2, Circle, Camera, User, Shirt, ArrowUp } from 'lucide-react-native';
 import Colors from '@/constants/colors';
-import { Player } from '@/types';
+import { Player, RestrictionStatus } from '@/types';
+import { getRestrictionStatusLabel, getRestrictionStatusColor, isActuallyPlayingUp } from '@/utils/playerUtils';
 
 interface PlayerCardProps {
   player: Player;
@@ -16,6 +17,9 @@ function PlayerCard({ player }: PlayerCardProps) {
     console.log('Navigating to player:', player.id);
     router.push(`/player/${player.id}`);
   };
+
+  const restrictionStatus = player.restrictionStatus as RestrictionStatus | undefined;
+  const playsUp = isActuallyPlayingUp(player);
 
   return (
     <TouchableOpacity
@@ -40,9 +44,21 @@ function PlayerCard({ player }: PlayerCardProps) {
       </View>
 
       <View style={styles.info}>
-        <Text style={styles.name}>
-          {player.lastName}, {player.firstName}
-        </Text>
+        <View style={styles.nameRow}>
+          <Text style={styles.name}>
+            {player.lastName}, {player.firstName}
+          </Text>
+          {restrictionStatus === 'penny_player' && (
+            <View style={styles.iconBadge}>
+              <Shirt size={16} color="#DC2626" fill="#DC2626" fillOpacity={0.2} />
+            </View>
+          )}
+          {playsUp && (
+            <View style={styles.iconBadge}>
+              <ArrowUp size={18} color="#2563EB" />
+            </View>
+          )}
+        </View>
         <View style={styles.details}>
           <Text style={styles.detailText}>{player.ageGroup}</Text>
           <View style={styles.dot} />
@@ -51,6 +67,13 @@ function PlayerCard({ player }: PlayerCardProps) {
         {player.weight ? (
           <Text style={styles.weight}>{player.weight} lbs</Text>
         ) : null}
+        {restrictionStatus && restrictionStatus !== 'none' && (
+          <View style={[styles.restrictionBadge, { backgroundColor: getRestrictionStatusColor(restrictionStatus) + '20' }]}>
+            <Text style={[styles.restrictionText, { color: getRestrictionStatusColor(restrictionStatus) }]}>
+              {getRestrictionStatusLabel(restrictionStatus)}
+            </Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.statusContainer}>
@@ -122,11 +145,20 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 14,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+    flexWrap: 'wrap',
+  },
+  iconBadge: {
+    marginLeft: 6,
+    justifyContent: 'center',
+  },
   name: {
     fontSize: 16,
     fontWeight: '600' as const,
     color: Colors.text,
-    marginBottom: 4,
   },
   details: {
     flexDirection: 'row',
@@ -167,5 +199,16 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.textMuted,
     marginTop: 2,
+  },
+  restrictionBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginTop: 4,
+  },
+  restrictionText: {
+    fontSize: 10,
+    fontWeight: '600' as const,
   },
 });

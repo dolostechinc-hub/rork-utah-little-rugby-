@@ -5,6 +5,28 @@ import Colors from '@/constants/colors';
 import type { Coach, CoachTeam } from '@/types';
 import CoachCard from './CoachCard';
 
+// Same club normalization used by roster and check-in screens so filter
+// values match coach_teams rows regardless of "Little " prefix or aliases.
+const CLUB_ALIASES: Record<string, string> = {
+  'cache valley pirates': 'Cache Valley',
+  'mountain ridge black': 'Mountain Ridge',
+  mvp: 'Mountain Valley Powerhouse',
+  provo: 'Provo Steelers',
+  richfield: 'Richfield Broncos',
+  westlake: 'Westlake Drua',
+};
+
+function canonicalClubName(club: string | null | undefined): string {
+  const stripped = (club || '')
+    .toString()
+    .trim()
+    .replace(/^little\s+/i, '')
+    .replace(/\s+/g, ' ');
+
+  if (!stripped) return '';
+  return CLUB_ALIASES[stripped.toLowerCase()] ?? stripped;
+}
+
 interface CoachSectionProps {
   coaches: Coach[];
   coachTeams: CoachTeam[];
@@ -25,7 +47,7 @@ interface CoachSectionProps {
  */
 function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSectionProps) {
   const hasActiveFilters =
-    !!filters.club || !!filters.ageGroup || !!filters.division;
+    !!filters.club || !!filters.ageGroup || !!filters.division || !!filters.teamName;
 
   const filteredCoaches = useMemo(() => {
     if (!hasActiveFilters) return [];
@@ -44,10 +66,16 @@ function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSecti
     const targetAge = normalizeAge(filters.ageGroup);
     const targetDivision = normalizeStr(filters.division);
 
+    // Normalize coach_teams club the same way the roster screen does so
+    // "Little Brighton" in the filter matches "Brighton" in coach_teams.
+    function ctClubKey(club: string): string {
+      return canonicalClubName(club).toLowerCase();
+    }
+
     // Find which coach_teams rows match all active filters.
     const matchingCoachIds = new Set<string>();
     for (const ct of coachTeams) {
-      if (targetClub && normalizeStr(ct.club) !== targetClub) continue;
+      if (targetClub && ctClubKey(ct.club) !== targetClub) continue;
       if (targetAge && normalizeAge(ct.ageGroup) !== targetAge) continue;
       if (targetDivision && normalizeStr(ct.division) !== targetDivision) continue;
       if (filters.teamName) {
