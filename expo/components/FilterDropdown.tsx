@@ -11,10 +11,12 @@ import {
 import { ChevronDown, Check, X } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 
+type DropdownOption = string | { id: string; name: string };
+
 interface FilterDropdownProps {
   label: string;
   value: string | null;
-  options: { id: string; name: string }[];
+  options: DropdownOption[] | readonly DropdownOption[];
   onSelect: (value: string | null) => void;
   placeholder?: string;
   // Override the label colour. Used on screens that render the dropdown
@@ -32,6 +34,15 @@ export default function FilterDropdown({
   labelColor,
 }: FilterDropdownProps) {
   const [isOpen, setIsOpen] = useState(false);
+
+  // Normalize options so the FlatList always sees { id, name } pairs. Some
+  // callers (e.g. the Club filter) pass a plain string[]; without this we'd
+  // hit "Each child in a list should have a unique key prop" because
+  // keyExtractor would return undefined.
+  const normalizedOptions = (options as DropdownOption[]).map((o, i) => {
+    if (typeof o === 'string') return { id: `${o}-${i}`, name: o };
+    return { id: o.id || `${o.name}-${i}`, name: o.name };
+  });
 
   return (
     <View style={styles.container}>
@@ -75,7 +86,7 @@ export default function FilterDropdown({
             </TouchableOpacity>
 
             <FlatList
-              data={options}
+              data={normalizedOptions}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <TouchableOpacity

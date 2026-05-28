@@ -21,6 +21,7 @@ import OrgMovedBanner from '@/components/OrgMovedBanner';
 import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
 import { useRouter } from 'expo-router';
+import { playerHasTeam } from '@/utils/teamAssignments';
 
 // FilterDropdown identifies its rows by `id` and surfaces `name` to the
 // user. The names here are matched against in the onSelect handler to
