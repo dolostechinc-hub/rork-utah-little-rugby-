@@ -3470,9 +3470,9 @@ export default function SettingsScreen() {
               <>
                 <View style={styles.modalInfo}>
                   <Text style={styles.modalInfoText}>
-                    Email sent to <Text style={{ fontWeight: '600' }}>{signInEmailInput.trim()}</Text>.
-                    {'\n\n'}
-                    Either tap the magic link in the email (returns you here automatically), or paste the verification code from the email below — both work.
+                    {'Email sent to '}
+                    <Text style={{ fontWeight: '600' }}>{signInEmailInput.trim()}</Text>
+                    {'.\n\nEither tap the magic link in the email (returns you here automatically), or paste the verification code from the email below — both work.'}
                   </Text>
                 </View>
 
