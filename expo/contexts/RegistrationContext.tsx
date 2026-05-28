@@ -60,6 +60,8 @@ import {
   fetchCoaches,
   fetchCoachTeams,
   upsertCoach,
+  upsertCoachTeams,
+  deleteCoach as deleteCoachRemote,
   subscribeToCoaches,
   type CoachChange,
 } from '@/lib/coachSync';
@@ -804,6 +806,97 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       unsubscribe();
     };
   }, [currentOrg?.id]);
+
+  const addCoach = useCallback(
+    async (
+      input: Omit<Coach, 'id' | 'checkedIn' | 'checkedInAt'>,
+      teamAssignments: Omit<CoachTeam, 'id' | 'coachId' | 'orgId'>[],
+    ): Promise<Coach | null> => {
+      if (!currentOrg?.id) return null;
+      const newCoach: Coach = {
+        id: randomId('coach'),
+        firstName: input.firstName ?? '',
+        lastName: input.lastName ?? '',
+        photoUri: input.photoUri ?? null,
+        isCertified: !!input.isCertified,
+        checkedIn: false,
+        checkedInAt: null,
+      };
+      // Optimistic
+      setCoaches((prev) => [...prev, newCoach]);
+      const ctRows: CoachTeam[] = teamAssignments.map((t) => ({
+        id: `${newCoach.id}_${(t.teamName || '').replace(/\s+/g, '_').toLowerCase()}`,
+        coachId: newCoach.id,
+        orgId: currentOrg.id,
+        club: t.club ?? '',
+        ageGroup: t.ageGroup ?? '',
+        division: t.division ?? '',
+        teamName: t.teamName ?? '',
+      }));
+      setCoachTeams((prev) => [...prev, ...ctRows]);
+      try {
+        await upsertCoach(currentOrg.id, newCoach);
+        await upsertCoachTeams(currentOrg.id, newCoach.id, teamAssignments);
+        return newCoach;
+      } catch (err) {
+        console.warn('[coachSync] addCoach failed, reverting:', err);
+        setCoaches((prev) => prev.filter((c) => c.id !== newCoach.id));
+        setCoachTeams((prev) => prev.filter((ct) => ct.coachId !== newCoach.id));
+        throw err;
+      }
+    },
+    [currentOrg?.id],
+  );
+
+  const deleteCoach = useCallback(
+    async (coachId: string): Promise<void> => {
+      if (!currentOrg?.id || !coachId) return;
+      const prevCoaches = coaches;
+      const prevTeams = coachTeams;
+      // Optimistic
+      setCoaches((p) => p.filter((c) => c.id !== coachId));
+      setCoachTeams((p) => p.filter((ct) => ct.coachId !== coachId));
+      try {
+        await deleteCoachRemote(currentOrg.id, coachId);
+      } catch (err) {
+        console.warn('[coachSync] deleteCoach failed, reverting:', err);
+        setCoaches(prevCoaches);
+        setCoachTeams(prevTeams);
+        throw err;
+      }
+    },
+    [currentOrg?.id, coaches, coachTeams],
+  );
+
+  const setCoachTeamAssignments = useCallback(
+    async (
+      coachId: string,
+      teamAssignments: Omit<CoachTeam, 'id' | 'coachId' | 'orgId'>[],
+    ): Promise<void> => {
+      if (!currentOrg?.id || !coachId) return;
+      const orgId = currentOrg.id;
+      const prev = coachTeams;
+      const newRows: CoachTeam[] = teamAssignments.map((t) => ({
+        id: `${coachId}_${(t.teamName || '').replace(/\s+/g, '_').toLowerCase()}`,
+        coachId,
+        orgId,
+        club: t.club ?? '',
+        ageGroup: t.ageGroup ?? '',
+        division: t.division ?? '',
+        teamName: t.teamName ?? '',
+      }));
+      // Optimistic: drop this coach's rows, add the new ones
+      setCoachTeams((p) => [...p.filter((ct) => ct.coachId !== coachId), ...newRows]);
+      try {
+        await upsertCoachTeams(orgId, coachId, teamAssignments);
+      } catch (err) {
+        console.warn('[coachSync] setCoachTeamAssignments failed, reverting:', err);
+        setCoachTeams(prev);
+        throw err;
+      }
+    },
+    [currentOrg?.id, coachTeams],
+  );
 
   const updateCoach = useCallback(async (coach: Coach): Promise<void> => {
     if (!currentOrg?.id) return;
@@ -2602,6 +2695,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     coaches,
     coachTeams,
     updateCoach,
+    addCoach,
+    deleteCoach,
+    setCoachTeamAssignments,
   }), [
     players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
     updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
@@ -2620,7 +2716,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     cloudQueue, isCloudSyncing, isOnline, lastCloudSyncedAt, lastCloudSyncResult,
     flushCloudQueueNow, forceSyncAllToCloud, refreshRosterFromCloud,
     enqueuePhotoUpload, flushPhotoQueueNow, photoUploadQueue.length,
-    coaches, coachTeams, updateCoach,
+    coaches, coachTeams, updateCoach, addCoach, deleteCoach, setCoachTeamAssignments,
   ]);
 });
 

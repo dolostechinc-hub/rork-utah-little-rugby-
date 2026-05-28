@@ -37,6 +37,7 @@ import {
   UserPlus,
   Users,
   UserCog,
+  Users as UsersIcon,
   ShieldCheck,
   ShieldOff,
   UserX,
@@ -1739,6 +1740,21 @@ export default function SettingsScreen() {
               </View>
             </View>
           </View>
+        </View>
+      )}
+
+      {isAdmin && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Coaches</Text>
+          <TouchableOpacity
+            style={styles.editorActionButton}
+            onPress={() => router.push('/coach/admin')}
+            activeOpacity={0.7}
+            testID="manage-coaches-button"
+          >
+            <UsersIcon size={18} color={Colors.primary} />
+            <Text style={styles.editorActionText}>Manage Coaches</Text>
+          </TouchableOpacity>
         </View>
       )}
 

@@ -148,6 +148,22 @@ export async function upsertCoachTeams(
   }
 }
 
+// ── Delete ─────────────────────────────────────────────────────────────────
+
+export async function deleteCoach(orgId: string, coachId: string): Promise<void> {
+  if (!orgId || !coachId) return;
+  // coach_teams rows cascade via FK ON DELETE CASCADE
+  const { error } = await supabase
+    .from('coaches')
+    .delete()
+    .eq('id', coachId)
+    .eq('org_id', orgId);
+  if (error) {
+    console.warn('[coachSync] deleteCoach failed:', error.message, coachId);
+    throw error;
+  }
+}
+
 // ── Realtime subscription ──────────────────────────────────────────────────
 
 export type CoachChange =

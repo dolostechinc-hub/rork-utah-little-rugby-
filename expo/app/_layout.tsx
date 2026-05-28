@@ -29,6 +29,8 @@ function RootLayoutNav() {
           presentation: 'card',
         }}
       />
+      <Stack.Screen name="coach/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="coach/admin" options={{ headerShown: false }} />
     </Stack>
   );
 }
