@@ -9,7 +9,7 @@ import {
   RefreshControl,
   Keyboard,
 } from 'react-native';
-import { Player, CheckInStatusFilter } from '@/types';
+import { Player, CheckInStatusFilter, Coach } from '@/types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Search } from 'lucide-react-native';
 import { useRegistration } from '@/contexts/RegistrationContext';
@@ -18,6 +18,7 @@ import PlayerCard from '@/components/PlayerCard';
 import StatsBar from '@/components/StatsBar';
 import CloudSyncBanner from '@/components/CloudSyncBanner';
 import OrgMovedBanner from '@/components/OrgMovedBanner';
+import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
 
 // FilterDropdown identifies its rows by `id` and surfaces `name` to the
@@ -70,7 +71,12 @@ export default function CheckInScreen() {
     divisions,
     isLoading,
     refreshData,
-  } = useRegistration();
+    coaches,
+    coachTeams,
+  } = useRegistration() as ReturnType<typeof useRegistration> & {
+    coaches: Coach[];
+    coachTeams: { coachId: string; teamName: string; club: string; ageGroup: string; division: string }[];
+  };
 
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -191,6 +197,10 @@ export default function CheckInScreen() {
 
   const keyExtractor = useCallback((item: Player) => item.id, []);
 
+  const handleCoachPress = useCallback((coach: Coach) => {
+    router.push(`/coach/${coach.id}`);
+  }, [router]);
+
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -295,6 +305,13 @@ export default function CheckInScreen() {
           total={stats.total}
           checkedIn={stats.checkedIn}
           pending={stats.pending}
+        />
+
+        <CoachSection
+          coaches={coaches as Coach[]}
+          coachTeams={coachTeams as { coachId: string; teamName: string; club: string; ageGroup: string; division: string }[]}
+          filters={filters}
+          onCoachPress={handleCoachPress}
         />
 
         <FlatList

@@ -225,3 +225,23 @@ export interface ImportedSheet {
   isLocked: boolean;
   allowEditing: boolean;
 }
+
+export interface Coach {
+  id: string;
+  firstName: string;
+  lastName: string;
+  photoUri: string | null;
+  isCertified: boolean;
+  checkedIn: boolean;
+  checkedInAt: string | null;
+}
+
+export interface CoachTeam {
+  id: string;
+  coachId: string;
+  orgId: string;
+  club: string;
+  ageGroup: string;
+  division: string;
+  teamName: string;
+}

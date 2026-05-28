@@ -56,6 +56,14 @@ import {
 } from '@/lib/eventModeSync';
 import { fetchSheetCsv, parseCSV } from '@/lib/googleSheetsCsv';
 import { parseTeamAssignments, playerHasTeam } from '@/utils/teamAssignments';
+import {
+  fetchCoaches,
+  fetchCoachTeams,
+  upsertCoach,
+  subscribeToCoaches,
+  type CoachChange,
+} from '@/lib/coachSync';
+import type { Coach, CoachTeam } from '@/types';
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY = 1000;
@@ -315,6 +323,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const [importedTeams, setImportedTeams] = useState<TeamOption[]>([]);
   const [importedAgeGroups, setImportedAgeGroups] = useState<AgeGroup[]>([]);
   const [importedDivisions, setImportedDivisions] = useState<Division[]>([]);
+
+  // ── Coach state ──────────────────────────────────────────────────
+  const [coaches, setCoaches] = useState<Coach[]>([]);
+  const [coachTeams, setCoachTeams] = useState<CoachTeam[]>([]);
 
   // Canonical clubs come from `public.clubs` (migration 025). They are the
   // ONLY source of truth for the club picker — we no longer derive clubs
@@ -748,6 +760,76 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       pendingChangesRef.current = new Map();
     };
   }, [currentOrg?.id, applyRosterChangeLocally, refreshRosterFromCloud]);
+
+  // ── Coach fetch + realtime subscription ──────────────────────────
+  useEffect(() => {
+    if (!currentOrg?.id) return;
+    let cancelled = false;
+    const orgId = currentOrg.id;
+
+    void (async () => {
+      try {
+        const [fetchedCoaches, fetchedCoachTeams] = await Promise.all([
+          fetchCoaches(orgId),
+          fetchCoachTeams(orgId),
+        ]);
+        if (cancelled) return;
+        setCoaches(fetchedCoaches);
+        setCoachTeams(fetchedCoachTeams);
+        console.log('[coachSync] loaded', fetchedCoaches.length, 'coaches and', fetchedCoachTeams.length, 'team assignments');
+      } catch (err) {
+        console.warn('[coachSync] initial fetch failed:', err);
+      }
+    })();
+
+    const unsubscribe = subscribeToCoaches(orgId, (change: CoachChange) => {
+      if (cancelled) return;
+      if (change.kind === 'upsert') {
+        setCoaches((prev) => {
+          const idx = prev.findIndex((c) => c.id === change.coach.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = change.coach;
+            return next;
+          }
+          return [...prev, change.coach];
+        });
+      } else if (change.kind === 'delete') {
+        setCoaches((prev) => prev.filter((c) => c.id !== change.id));
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [currentOrg?.id]);
+
+  const updateCoach = useCallback(async (coach: Coach): Promise<void> => {
+    if (!currentOrg?.id) return;
+    // Optimistic local update
+    setCoaches((prev) => {
+      const idx = prev.findIndex((c) => c.id === coach.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = coach;
+        return next;
+      }
+      return [...prev, coach];
+    });
+    // Push to Supabase
+    try {
+      await upsertCoach(currentOrg.id, coach);
+      console.log('[coachSync] upserted coach', coach.id);
+    } catch (err) {
+      console.warn('[coachSync] upsert failed, reverting:', err);
+      // Revert on failure by re-fetching
+      try {
+        const fresh = await fetchCoaches(currentOrg.id);
+        setCoaches(fresh);
+      } catch (_) {}
+    }
+  }, [currentOrg?.id]);
 
   // ---------------------------------------------------------------------------
   // Cross-device event_mode sync.
@@ -2517,6 +2599,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     enqueuePhotoUpload,
     flushPhotoQueueNow,
     photoUploadPendingCount: photoUploadQueue.length,
+    coaches,
+    coachTeams,
+    updateCoach,
   }), [
     players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
     updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
@@ -2535,6 +2620,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     cloudQueue, isCloudSyncing, isOnline, lastCloudSyncedAt, lastCloudSyncResult,
     flushCloudQueueNow, forceSyncAllToCloud, refreshRosterFromCloud,
     enqueuePhotoUpload, flushPhotoQueueNow, photoUploadQueue.length,
+    coaches, coachTeams, updateCoach,
   ]);
 });
 

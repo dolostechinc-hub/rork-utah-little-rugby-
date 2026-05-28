@@ -28,8 +28,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRegistration } from '@/contexts/RegistrationContext';
 import FilterDropdown from '@/components/FilterDropdown';
 import SyncStatusBadge from '@/components/SyncStatusBadge';
+import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
-import { Player, RestrictionStatus } from '@/types';
+import { Player, RestrictionStatus, Coach } from '@/types';
 import { playerHasTeam } from '@/utils/teamAssignments';
 import { getRestrictionStatusLabel, getRestrictionStatusColor } from '@/utils/playerUtils';
 
@@ -82,8 +83,12 @@ export default function RosterScreen() {
     isLoading,
     refreshData,
     refreshRosterFromCloud,
+    coaches,
+    coachTeams,
   } = useRegistration() as ReturnType<typeof useRegistration> & {
     refreshRosterFromCloud: () => Promise<'ok' | 'no-org' | 'aborted' | 'error'>;
+    coaches: Coach[];
+    coachTeams: { coachId: string; teamName: string; club: string; ageGroup: string; division: string }[];
   };
 
   // Use teams from context directly
@@ -186,6 +191,10 @@ export default function RosterScreen() {
 
   const handlePlayerPress = useCallback((player: Player) => {
     router.push(`/player/${player.id}`);
+  }, [router]);
+
+  const handleCoachPress = useCallback((coach: Coach) => {
+    router.push(`/coach/${coach.id}`);
   }, [router]);
 
   const renderPlayerItem = useCallback(({ item }: { item: Player }) => {
@@ -407,6 +416,18 @@ export default function RosterScreen() {
           )}
         </View>
       )}
+
+      <CoachSection
+        coaches={coaches as Coach[]}
+        coachTeams={coachTeams as { coachId: string; teamName: string; club: string; ageGroup: string; division: string }[]}
+        filters={{
+          club: selectedClub,
+          ageGroup: selectedAgeGroup,
+          division: selectedDivision,
+          teamName: selectedTeamName,
+        }}
+        onCoachPress={handleCoachPress}
+      />
 
       <FlatList
         data={filteredPlayers}

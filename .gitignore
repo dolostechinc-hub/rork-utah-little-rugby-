@@ -12,3 +12,4 @@ expo/utah-little-rugby-2026-regs-*.json
 
 # Cursor IDE local hook state, agent transcripts, etc.
 .cursor/
+.rork
