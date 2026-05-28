@@ -2686,27 +2686,6 @@ export default function SettingsScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Resources</Text>
-
-        <TouchableOpacity
-          style={styles.card}
-          onPress={() => Linking.openURL('https://docs.google.com/spreadsheets/d/1RwTB0Dnv1fe5Hgz0oa9Y5Y1A245fav9ZKOXzecA6b5Q/edit?usp=sharing')}
-          activeOpacity={0.7}
-        >
-          <View style={[styles.iconBg, { backgroundColor: '#E8F5E9' }]}>
-            <FileSpreadsheet size={24} color="#34A853" />
-          </View>
-          <View style={styles.cardContent}>
-            <Text style={styles.cardTitle}>Google Sheet Template</Text>
-            <Text style={styles.cardDescription}>
-              Use this template when creating your organization's roster spreadsheet
-            </Text>
-          </View>
-          <Link size={20} color={Colors.textMuted} />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.section}>
         <Text style={styles.sectionTitle}>About</Text>
 
         <View style={styles.infoCard}>
