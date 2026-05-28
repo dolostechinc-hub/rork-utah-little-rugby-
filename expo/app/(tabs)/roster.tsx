@@ -246,10 +246,10 @@ export default function RosterScreen() {
             <Text style={styles.metaDot}>•</Text>
             <Text style={styles.playerDivision}>{item.division}</Text>
           </View>
-          {item.weight && (
+          {!!item.weight && (
             <Text style={styles.playerWeight}>{item.weight} lbs</Text>
           )}
-          {restrictionStatus && restrictionStatus !== 'none' && (
+          {!!restrictionStatus && restrictionStatus !== 'none' && (
             <View style={[styles.restrictionBadge, { backgroundColor: getRestrictionStatusColor(restrictionStatus) + '20' }]}>
               <Text style={[styles.restrictionText, { color: getRestrictionStatusColor(restrictionStatus) }]}>
                 {getRestrictionStatusLabel(restrictionStatus)}
