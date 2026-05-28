@@ -38,17 +38,14 @@ import WeightRestrictionModal from '@/components/WeightRestrictionModal';
 import TeamAssignmentModal from '@/components/TeamAssignmentModal';
 import { formatTeamAssignments } from '@/utils/teamAssignments';
 import {
+  ageGroupRank,
   calculateAgeGroup,
   checkWeightRestriction,
   getRestrictionStatusLabel,
   getRestrictionStatusColor,
   getNextAgeGroup,
+  isActuallyPlayingUp,
 } from '@/utils/playerUtils';
-
-function ageGroupRank(ageGroup: string | null | undefined): number | null {
-  const match = (ageGroup || '').match(/\d{1,2}/);
-  return match ? parseInt(match[0], 10) : null;
-}
 
 export default function PlayerDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -162,11 +159,19 @@ export default function PlayerDetailScreen() {
     );
     setPlaysUp(player.playsUp ?? isLegacyPlayUp);
 
-    if (player.playsUp || isLegacyPlayUp) {
-      setPlayUpAgeGroup(player.ageGroup);
-    } else {
-      setPlayUpAgeGroup(null);
-    }
+    // Only treat as playing up when the rostered age group is strictly
+    // higher than the DOB-calculated age group.  A bare `playsUp` flag
+    // with matching ranks (e.g. both U14) is a no-op and must not show
+    // the "Playing Up" banner or ↑ badge.
+    const actuallyPlayingUp =
+      (player.playsUp || isLegacyPlayUp) &&
+      isActuallyPlayingUp({
+        playsUp: player.playsUp ?? isLegacyPlayUp,
+        ageGroup: player.ageGroup,
+        calculatedAgeGroup: calculateAgeGroup(player.dateOfBirth) ?? player.calculatedAgeGroup ?? null,
+      });
+    setPlaysUp(actuallyPlayingUp);
+    setPlayUpAgeGroup(actuallyPlayingUp ? player.ageGroup : null);
   }, [player]);
 
   const calculatedAgeGroup = useMemo(() => {

@@ -126,6 +126,30 @@ export function getRestrictionStatusColor(status: RestrictionStatus): string {
   }
 }
 
+/** Extracts numeric rank from an age-group string (e.g. "U14" → 14). */
+export function ageGroupRank(ageGroup: string | null | undefined): number | null {
+  const match = (ageGroup || '').match(/\d{1,2}/);
+  return match ? parseInt(match[0], 10) : null;
+}
+
+/**
+ * Returns true only when a player is rostered in an age group strictly
+ * higher than their DOB-calculated age group.  A bare `playsUp` flag is
+ * not enough — the ranks must actually differ (fixes the "U14 → U14"
+ * no-op display that occurred when `playsUp` was set on in-group players).
+ */
+export function isActuallyPlayingUp(player: {
+  playsUp?: boolean;
+  ageGroup?: string | null;
+  calculatedAgeGroup?: string | null;
+}): boolean {
+  if (!player.playsUp) return false;
+  const actualRank = ageGroupRank(player.ageGroup);
+  const calculatedRank = ageGroupRank(player.calculatedAgeGroup);
+  if (actualRank === null || calculatedRank === null) return false;
+  return actualRank > calculatedRank;
+}
+
 // Stable color for the play-up chip. Kept separate from the restriction
 // color so a "Play Up + Open Division" badge group can carry both
 // without color clash.

@@ -32,7 +32,7 @@ import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
 import { Player, RestrictionStatus, Coach } from '@/types';
 import { playerHasTeam } from '@/utils/teamAssignments';
-import { getRestrictionStatusLabel, getRestrictionStatusColor } from '@/utils/playerUtils';
+import { getRestrictionStatusLabel, getRestrictionStatusColor, isActuallyPlayingUp } from '@/utils/playerUtils';
 
 // Don't re-pull the cloud roster on every focus event -- tab-switching
 // would hammer Supabase. 10 seconds is short enough that returning from
@@ -200,7 +200,10 @@ export default function RosterScreen() {
   const renderPlayerItem = useCallback(({ item }: { item: Player }) => {
     const hasPhoto = item.photoUri && item.isAgeVerified;
     const restrictionStatus = item.restrictionStatus as RestrictionStatus | undefined;
-    const playsUp = !!item.playsUp;
+    // Only show the ↑ arrow when the rostered age group is actually higher
+    // than the DOB-calculated age group — a bare `playsUp` flag with
+    // matching ranks (e.g. both U14) is a no-op.
+    const playsUp = isActuallyPlayingUp(item);
     
     return (
       <TouchableOpacity
