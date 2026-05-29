@@ -66,6 +66,7 @@ import {
   subscribeToCoaches,
   type CoachChange,
 } from '@/lib/coachSync';
+import { uploadCoachPhoto } from '@/lib/supabase';
 import type { Coach, CoachTeam } from '@/types';
 
 const RETRY_COUNT = 3;
@@ -835,11 +836,34 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       teamAssignments: Omit<CoachTeam, 'id' | 'coachId' | 'orgId'>[],
     ): Promise<Coach | null> => {
       if (!currentOrg?.id) return null;
+      const newCoachId = randomId('coach');
+      const orgId = currentOrg.id;
+
+      // Upload photo to Supabase Storage if it's a local file:// URI.
+      // This matches the player flow: local URIs are device-only and
+      // won't render on other volunteers' devices. We upload inline
+      // here because coach edits are infrequent (unlike rapid player
+      // check-ins, which use a background queue).
+      let cloudPhotoUri: string | null = input.photoUri ?? null;
+      if (cloudPhotoUri && !cloudPhotoUri.startsWith('http')) {
+        try {
+          const coachName = `${input.firstName ?? ''} ${input.lastName ?? ''}`.trim();
+          cloudPhotoUri = await uploadCoachPhoto(newCoachId, cloudPhotoUri, orgId, 2, coachName || undefined);
+          console.log('[coachSync] photo uploaded for new coach', newCoachId, '->', cloudPhotoUri);
+        } catch (err) {
+          console.warn('[coachSync] photo upload failed for new coach, saving with local URI as fallback:', err);
+          // Fall through with the original local URI so the photo at
+          // least shows on this device. The shareablePhotoUri guard in
+          // coachToRow will filter it from the cloud row, so other
+          // devices won't see a broken image.
+        }
+      }
+
       const newCoach: Coach = {
-        id: randomId('coach'),
+        id: newCoachId,
         firstName: input.firstName ?? '',
         lastName: input.lastName ?? '',
-        photoUri: input.photoUri ?? null,
+        photoUri: cloudPhotoUri,
         isCertified: !!input.isCertified,
         checkedIn: false,
         checkedInAt: null,
@@ -857,8 +881,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       }));
       setCoachTeams((prev) => [...prev, ...ctRows]);
       try {
-        await upsertCoach(currentOrg.id, newCoach);
-        await upsertCoachTeams(currentOrg.id, newCoach.id, teamAssignments);
+        await upsertCoach(orgId, newCoach);
+        await upsertCoachTeams(orgId, newCoach.id, teamAssignments);
         return newCoach;
       } catch (err) {
         console.warn('[coachSync] addCoach failed, reverting:', err);
@@ -922,25 +946,42 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
 
   const updateCoach = useCallback(async (coach: Coach): Promise<void> => {
     if (!currentOrg?.id) return;
+    const orgId = currentOrg.id;
+
+    // Upload photo if it's a local file:// URI (same reasoning as addCoach)
+    let cloudPhotoUri: string | null = coach.photoUri ?? null;
+    if (cloudPhotoUri && !cloudPhotoUri.startsWith('http')) {
+      try {
+        const coachName = `${coach.firstName ?? ''} ${coach.lastName ?? ''}`.trim();
+        cloudPhotoUri = await uploadCoachPhoto(coach.id, cloudPhotoUri, orgId, 2, coachName || undefined);
+        console.log('[coachSync] photo uploaded for coach', coach.id, '->', cloudPhotoUri);
+      } catch (err) {
+        console.warn('[coachSync] photo upload failed for coach update, using local URI fallback:', err);
+      }
+    }
+
+    const coachWithCloudPhoto: Coach = { ...coach, photoUri: cloudPhotoUri };
+
     // Optimistic local update
     setCoaches((prev) => {
-      const idx = prev.findIndex((c) => c.id === coach.id);
+      const idx = prev.findIndex((c) => c.id === coachWithCloudPhoto.id);
       if (idx >= 0) {
         const next = [...prev];
-        next[idx] = coach;
+        next[idx] = coachWithCloudPhoto;
         return next;
       }
-      return [...prev, coach];
+      return [...prev, coachWithCloudPhoto];
     });
-    // Push to Supabase
+    // Push to Supabase (shareablePhotoUri in coachToRow filters any
+    // remaining file:// URIs as a safety net)
     try {
-      await upsertCoach(currentOrg.id, coach);
+      await upsertCoach(orgId, coachWithCloudPhoto);
       console.log('[coachSync] upserted coach', coach.id);
     } catch (err) {
       console.warn('[coachSync] upsert failed, reverting:', err);
       // Revert on failure by re-fetching
       try {
-        const fresh = await fetchCoaches(currentOrg.id);
+        const fresh = await fetchCoaches(orgId);
         setCoaches(fresh);
       } catch (_) {}
     }

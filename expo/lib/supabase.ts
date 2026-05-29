@@ -174,6 +174,7 @@ async function readPhotoAsBody(photoUri: string): Promise<PhotoBodyResult> {
 }
 
 export const PLAYER_PHOTOS_BUCKET = 'player_photos';
+export const COACH_PHOTOS_BUCKET = 'player_photos'; // coaches share the same bucket, differentiated by path prefix
 
 function getUploadContentType(photoUri: string): string {
   const fileExt = photoUri.split('.').pop()?.toLowerCase() || 'jpg';
@@ -390,6 +391,109 @@ export async function debugUploadTest(orgId: string = 'debug'): Promise<{
       errorObj: err,
     };
   }
+}
+
+export async function uploadCoachPhoto(
+  coachId: string,
+  photoUri: string,
+  orgId: string,
+  maxRetries: number = 3,
+  coachName?: string
+): Promise<string> {
+  if (!photoUri) {
+    throw new Error('No photo URI provided');
+  }
+
+  if (photoUri.startsWith('http')) {
+    return photoUri;
+  }
+
+  const processedUri = await compressPhotoForUpload(photoUri);
+  const photo = await readPhotoAsBody(processedUri);
+  const contentType = getUploadContentType(processedUri);
+  const ext = getUploadExtension(processedUri);
+  const nameSlug = coachName ? slugifyPlayerName(coachName) : '';
+  const fileName = nameSlug
+    ? `${nameSlug}_${Date.now()}.${ext}`
+    : `${Date.now()}.${ext}`;
+  // Coaches live under a coaches/ prefix so they're easy to audit separately
+  const path = `coaches/${orgId}/${coachId}/${fileName}`;
+  console.log('[uploadCoachPhoto] path', { path, coachName, nameSlug });
+
+  let lastError: string | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const { data, error } = await supabase.storage
+        .from(COACH_PHOTOS_BUCKET)
+        .upload(path, photo.body, {
+          contentType,
+          upsert: true,
+        });
+
+      if (error || !data) {
+        lastError = [
+          'COACH UPLOAD FAILED',
+          `message: ${error?.message ?? 'unknown error'}`,
+          `bucket: ${COACH_PHOTOS_BUCKET}`,
+          `path: ${path}`,
+          `contentType: ${contentType}`,
+          `size: ${photo.size}`,
+          `source: ${photo.source}`,
+          `platform: ${Platform.OS}`,
+          `attempt: ${attempt}/${maxRetries}`,
+        ].join('\n');
+
+        if (attempt < maxRetries) {
+          await new Promise((res) => setTimeout(res, 800 * attempt));
+          continue;
+        }
+
+        throw new Error(lastError);
+      }
+
+      const { data: pub } = supabase.storage
+        .from(COACH_PHOTOS_BUCKET)
+        .getPublicUrl(data.path);
+
+      if (!pub?.publicUrl) {
+        throw new Error(
+          [
+            'COACH UPLOAD SUCCEEDED BUT URL FAILED',
+            `bucket: ${COACH_PHOTOS_BUCKET}`,
+            `path: ${data.path}`,
+            `attempt: ${attempt}/${maxRetries}`,
+          ].join('\n')
+        );
+      }
+
+      return pub.publicUrl;
+    } catch (err) {
+      lastError =
+        err instanceof Error
+          ? err.message
+          : [
+              'COACH UPLOAD FAILED',
+              `message: ${String(err)}`,
+              `bucket: ${COACH_PHOTOS_BUCKET}`,
+              `path: ${path}`,
+              `contentType: ${contentType}`,
+              `size: ${photo.size}`,
+              `source: ${photo.source}`,
+              `platform: ${Platform.OS}`,
+              `attempt: ${attempt}/${maxRetries}`,
+            ].join('\n');
+
+      if (attempt < maxRetries) {
+        await new Promise((res) => setTimeout(res, 800 * attempt));
+        continue;
+      }
+
+      throw new Error(lastError);
+    }
+  }
+
+  throw new Error(lastError ?? 'COACH UPLOAD FAILED\nmessage: unknown error');
 }
 
 export async function deletePlayerPhoto(photoUrl: string): Promise<boolean> {

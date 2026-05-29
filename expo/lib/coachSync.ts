@@ -39,13 +39,26 @@ function rowToCoach(row: CoachRow): Coach {
   };
 }
 
+/**
+ * A photoUri is "shareable" (and worth writing to the cloud row) only if
+ * it's an https/http URL. Local URIs like `file:///...` are device-only
+ * and shouldn't be sent to other devices via Supabase. The photo upload
+ * in RegistrationContext will replace this with the real cloud URL before
+ * calling upsertCoach; this is a safety net in case a caller bypasses that.
+ */
+function shareablePhotoUri(uri: string | null | undefined): string | null {
+  if (!uri) return null;
+  if (uri.startsWith('http://') || uri.startsWith('https://')) return uri;
+  return null;
+}
+
 function coachToRow(orgId: string, coach: Coach): Omit<CoachRow, 'updated_at'> {
   return {
     id: coach.id,
     org_id: orgId,
     first_name: coach.firstName ?? '',
     last_name: coach.lastName ?? '',
-    photo_uri: coach.photoUri ?? null,
+    photo_uri: shareablePhotoUri(coach.photoUri),
     is_certified: !!coach.isCertified,
     checked_in: !!coach.checkedIn,
     checked_in_at: coach.checkedInAt ?? null,
