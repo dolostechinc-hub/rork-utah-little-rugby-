@@ -974,26 +974,45 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       let skipped = 0;
       const newCoaches: Coach[] = [];
       const newTeams: CoachTeam[] = [];
+      // Track coaches already created in this batch so additional rows
+      // for the same coach only add team assignments (no duplicate coach records).
+      const batchCoachIds = new Map<string, string>(); // nameKey -> coachId
 
       for (const row of rows) {
         const nameKey = `${(row.firstName || '').trim().toLowerCase()} ${(row.lastName || '').trim().toLowerCase()}`;
-        if (existingNames.has(nameKey) || !row.firstName?.trim() || !row.lastName?.trim()) {
+        if (!row.firstName?.trim() || !row.lastName?.trim()) {
           skipped++;
           continue;
         }
-        existingNames.add(nameKey); // prevent duplicates within the batch too
 
-        const coachId = randomId('coach');
-        const newCoach: Coach = {
-          id: coachId,
-          firstName: row.firstName.trim(),
-          lastName: row.lastName.trim(),
-          photoUri: null,
-          isCertified: !!row.isCertified,
-          checkedIn: false,
-          checkedInAt: null,
-        };
-        newCoaches.push(newCoach);
+        // Already exists in the DB — skip the entire row (idempotent).
+        if (existingNames.has(nameKey)) {
+          skipped++;
+          continue;
+        }
+
+        let coachId: string;
+        const existingBatchId = batchCoachIds.get(nameKey);
+        if (existingBatchId) {
+          // Same coach, additional row — only add the team assignment.
+          coachId = existingBatchId;
+        } else {
+          // First time seeing this coach in the batch.
+          coachId = randomId('coach');
+          batchCoachIds.set(nameKey, coachId);
+
+          const newCoach: Coach = {
+            id: coachId,
+            firstName: row.firstName.trim(),
+            lastName: row.lastName.trim(),
+            photoUri: null,
+            isCertified: !!row.isCertified,
+            checkedIn: false,
+            checkedInAt: null,
+          };
+          newCoaches.push(newCoach);
+          created++;
+        }
 
         if ((row.teamName || '').trim()) {
           newTeams.push({
@@ -1006,7 +1025,6 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
             teamName: (row.teamName || '').trim(),
           });
         }
-        created++;
       }
 
       if (created === 0) return { created: 0, skipped };
