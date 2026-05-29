@@ -26,7 +26,6 @@ import {
   X,
   Check,
   Pencil,
-  Filter,
   Upload,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
@@ -86,8 +85,6 @@ export default function CoachAdminScreen() {
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [isCertified, setIsCertified] = useState(false);
   const [teamDrafts, setTeamDrafts] = useState<TeamAssignmentDraft[]>([]);
-  const [showTeamPicker, setShowTeamPicker] = useState(false);
-  const [teamPickerClubFilter, setTeamPickerClubFilter] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [coachClub, setCoachClub] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
@@ -114,13 +111,10 @@ export default function CoachAdminScreen() {
     );
   }, [players]);
 
-  // Clubs for the form dropdown — canonical list from RegistrationContext
-  const clubDropdownOptions = useMemo<string[]>(() => {
-    return (canonicalClubs as unknown as { name: string }[]).map((c) => c.name);
-  }, [canonicalClubs]);
-
-  // Unique clubs for team picker filter
-  const uniqueClubs = useMemo<string[]>(() => {
+  // Clubs derived from the actual player roster so they always match
+  // the club names used in imported data (e.g. "Little Brighton", not "Brighton").
+  // Falls back to the canonical club list when the roster is empty.
+  const rosterClubs = useMemo<string[]>(() => {
     const set = new Set<string>();
     for (const t of availableTeams) {
       const club = (t.club || '').trim();
@@ -129,13 +123,16 @@ export default function CoachAdminScreen() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [availableTeams]);
 
-  // Filter available teams by selected club (from either the form club or the picker filter)
-  const activeClubFilter = teamPickerClubFilter ?? coachClub;
+  const clubDropdownOptions = useMemo<string[]>(() => {
+    if (rosterClubs.length > 0) return rosterClubs;
+    return (canonicalClubs as unknown as { name: string }[]).map((c) => c.name);
+  }, [rosterClubs, canonicalClubs]);
+
   const filteredAvailableTeams = useMemo(() => {
-    if (!activeClubFilter) return availableTeams;
-    const target = activeClubFilter.toLowerCase();
+    if (!coachClub) return availableTeams;
+    const target = coachClub.toLowerCase();
     return availableTeams.filter((t) => (t.club || '').toLowerCase() === target);
-  }, [availableTeams, activeClubFilter]);
+  }, [availableTeams, coachClub]);
 
   const sortedCoaches = useMemo(
     () =>
@@ -153,7 +150,6 @@ export default function CoachAdminScreen() {
     setPhotoUri(null);
     setIsCertified(false);
     setTeamDrafts([]);
-    setTeamPickerClubFilter(null);
     setCoachClub(null);
   }, []);
 
@@ -182,7 +178,6 @@ export default function CoachAdminScreen() {
       // Pre-select club from first assignment, auto-filter team picker
       const firstClub = assignments[0]?.club || null;
       setCoachClub(firstClub);
-      setTeamPickerClubFilter(firstClub);
     },
     [coachTeams],
   );
@@ -527,8 +522,6 @@ export default function CoachAdminScreen() {
                 options={clubDropdownOptions}
                 onSelect={(v) => {
                   setCoachClub(v);
-                  // Auto-filter team picker and clear teams from other clubs
-                  setTeamPickerClubFilter(v);
                   if (v) {
                     setTeamDrafts((prev) =>
                       prev.filter((t) => (t.club || '').toLowerCase() === v.toLowerCase()),
@@ -539,155 +532,65 @@ export default function CoachAdminScreen() {
               />
             </View>
 
-            {/* Team assignments */}
+            {/* Team assignments — inline picker */}
             <View style={styles.formSection}>
-              <View style={styles.assignHeader}>
-                <Text style={styles.label}>Team Assignments</Text>
-                <TouchableOpacity
-                  style={[styles.assignBtn, !coachClub && styles.assignBtnDisabled]}
-                  onPress={() => {
-                    if (!coachClub) {
-                      Alert.alert('Select Club First', 'Please select a club before assigning teams.');
-                      return;
-                    }
-                    setShowTeamPicker(true);
-                  }}
-                >
-                  <Plus size={16} color={Colors.primary} />
-                  <Text style={styles.assignBtnText}>Add Team</Text>
-                </TouchableOpacity>
-              </View>
-              {teamDrafts.length === 0 ? (
+              <Text style={styles.label}>Teams</Text>
+              {!coachClub ? (
                 <Text style={styles.emptyAssign}>
-                  No teams assigned. Tap "Add Team" to pick from your roster.
+                  Select a club above to see available teams.
+                </Text>
+              ) : filteredAvailableTeams.length === 0 ? (
+                <Text style={styles.emptyAssign}>
+                  No teams found for {coachClub}. Try a different club.
                 </Text>
               ) : (
-                teamDrafts.map((t) => (
-                  <View key={teamKey(t)} style={styles.teamChip}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.teamChipName}>{t.teamName || 'Unnamed'}</Text>
-                      <Text style={styles.teamChipMeta}>
-                        {t.club} • {t.ageGroup} • {t.division}
-                      </Text>
-                    </View>
-                    <TouchableOpacity onPress={() => toggleTeamDraft(t)} style={styles.iconBtn}>
-                      <X size={16} color={Colors.textMuted} />
+                filteredAvailableTeams.map((t) => {
+                  const k = teamKey(t);
+                  const selected = teamDrafts.some((d) => teamKey(d) === k);
+                  return (
+                    <TouchableOpacity
+                      key={k}
+                      style={[styles.pickerRow, selected && styles.pickerRowSelected]}
+                      onPress={() => toggleTeamDraft(t)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.pickerName}>
+                          {t.club} {t.ageGroup} {t.teamName}
+                        </Text>
+                        <Text style={styles.pickerMeta}>
+                          {t.division}{t.division ? ' • ' : ''}{t.ageGroup}
+                        </Text>
+                      </View>
+                      {selected && <Check size={20} color={Colors.success} />}
                     </TouchableOpacity>
-                  </View>
-                ))
+                  );
+                })
+              )}
+              {teamDrafts.length > 0 && (
+                <View style={{ marginTop: 14 }}>
+                  <Text style={[styles.label, { marginBottom: 8 }]}>
+                    Selected ({teamDrafts.length})
+                  </Text>
+                  {teamDrafts.map((t) => (
+                    <View key={teamKey(t)} style={styles.teamChip}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.teamChipName}>{t.teamName || 'Unnamed'}</Text>
+                        <Text style={styles.teamChipMeta}>
+                          {t.club} • {t.ageGroup} • {t.division}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={() => toggleTeamDraft(t)} style={styles.iconBtn}>
+                        <X size={16} color={Colors.textMuted} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
               )}
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Team picker modal */}
-      <Modal
-        visible={showTeamPicker}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={() => { setShowTeamPicker(false); }}
-      >
-        <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-          <TouchableOpacity
-            onPress={() => { setShowTeamPicker(false); }}
-            style={styles.backBtn}
-          >
-            <X size={24} color={Colors.white} />
-          </TouchableOpacity>
-          <Text style={styles.title}>
-            Select Teams{coachClub ? ` — ${coachClub}` : ''}
-          </Text>
-        </View>
-
-        {/* Club filter */}
-        {uniqueClubs.length > 1 && (
-          <View style={styles.clubFilterBar}>
-            <Filter size={14} color={Colors.textMuted} />
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.clubFilterScroll}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.clubFilterChip,
-                  !teamPickerClubFilter && styles.clubFilterChipActive,
-                ]}
-                onPress={() => setTeamPickerClubFilter(null)}
-              >
-                <Text
-                  style={[
-                    styles.clubFilterChipText,
-                    !teamPickerClubFilter && styles.clubFilterChipTextActive,
-                  ]}
-                >
-                  All Clubs
-                </Text>
-              </TouchableOpacity>
-              {uniqueClubs.map((club) => (
-                <TouchableOpacity
-                  key={club}
-                  style={[
-                    styles.clubFilterChip,
-                    teamPickerClubFilter === club && styles.clubFilterChipActive,
-                  ]}
-                  onPress={() =>
-                    setTeamPickerClubFilter(
-                      teamPickerClubFilter === club ? null : club,
-                    )
-                  }
-                >
-                  <Text
-                    style={[
-                      styles.clubFilterChipText,
-                      teamPickerClubFilter === club && styles.clubFilterChipTextActive,
-                    ]}
-                  >
-                    {club}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        )}
-
-        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-          {filteredAvailableTeams.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateTitle}>No teams found</Text>
-              <Text style={styles.emptyStateSub}>
-                {activeClubFilter
-                  ? `No teams for ${activeClubFilter}. Try a different club.`
-                  : 'Teams come from your imported player roster. Import players first, then assign coaches.'}
-              </Text>
-            </View>
-          ) : (
-            filteredAvailableTeams.map((t) => {
-              const k = teamKey(t);
-              const selected = teamDrafts.some((d) => teamKey(d) === k);
-              return (
-                <TouchableOpacity
-                  key={k}
-                  style={[styles.pickerRow, selected && styles.pickerRowSelected]}
-                  onPress={() => toggleTeamDraft(t)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.pickerName}>
-                      {t.club} {t.ageGroup} {t.teamName}
-                    </Text>
-                    <Text style={styles.pickerMeta}>
-                      {t.division}{' '}
-                      {t.division ? '•' : ''} {t.club} {t.ageGroup}
-                    </Text>
-                  </View>
-                  {selected && <Check size={20} color={Colors.success} />}
-                </TouchableOpacity>
-              );
-            })
-          )}
-        </ScrollView>
-      </Modal>
 
       {/* Coach CSV import modal */}
       <CoachCSVImportModal
