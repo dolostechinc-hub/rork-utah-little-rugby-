@@ -1325,8 +1325,26 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       );
       return result;
     } catch (err) {
-      console.warn('[cloudSync] flush threw:', err);
-      return null;
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[cloudSync] flush threw:', message);
+      // Mark every in-flight item as failed so the banner shows error
+      // details and the periodic 30 s retry has accurate retry counts.
+      const stamped = items.map((i) => ({
+        ...i,
+        retries: i.retries + 1,
+        lastTriedAt: new Date().toISOString(),
+        lastError: i.lastError || message,
+      }));
+      await persistCloudQueue(orgId, stamped);
+      return {
+        synced: [],
+        merged: [],
+        failed: items.map((i) => ({
+          itemId: i.id,
+          playerId: i.playerId,
+          error: message,
+        })),
+      };
     } finally {
       isCloudSyncingRef.current = false;
       setIsCloudSyncing(false);
