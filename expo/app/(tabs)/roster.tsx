@@ -85,8 +85,10 @@ export default function RosterScreen() {
     refreshRosterFromCloud,
     coaches,
     coachTeams,
+    refreshCoaches,
   } = useRegistration() as ReturnType<typeof useRegistration> & {
     refreshRosterFromCloud: () => Promise<'ok' | 'no-org' | 'aborted' | 'error'>;
+    refreshCoaches: () => Promise<void>;
     coaches: Coach[];
     coachTeams: { coachId: string; teamName: string; club: string; ageGroup: string; division: string }[];
   };
@@ -105,7 +107,8 @@ export default function RosterScreen() {
       }
       lastFocusRefreshRef.current = now;
       void refreshRosterFromCloud();
-    }, [refreshRosterFromCloud]),
+      void refreshCoaches();
+    }, [refreshRosterFromCloud, refreshCoaches]),
   );
 
   const [searchQuery, setSearchQuery] = useState('');

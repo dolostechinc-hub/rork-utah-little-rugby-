@@ -62,7 +62,9 @@ function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSecti
       return raw.replace(/\s+/g, '');
     };
 
-    const targetClub = normalizeStr(filters.club);
+    // Apply the same canonicalClubName normalisation that ctClubKey uses
+    // so that "Little Brighton" in the filter matches "Brighton" in coach_teams.
+    const targetClub = canonicalClubName(filters.club).toLowerCase();
     const targetAge = normalizeAge(filters.ageGroup);
     const targetDivision = normalizeStr(filters.division);
 

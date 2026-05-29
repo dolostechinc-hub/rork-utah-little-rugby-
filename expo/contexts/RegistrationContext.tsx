@@ -807,6 +807,27 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     };
   }, [currentOrg?.id]);
 
+  // Allow the roster screen to re-pull coach data when it gains focus,
+  // so coaches added on another device (or whose initial fetch silently
+  // failed before the tables existed) show up without a full app restart.
+  const refreshCoaches = useCallback(async () => {
+    const orgId = currentOrg?.id;
+    if (!orgId) return;
+    try {
+      const [fetchedCoaches, fetchedCoachTeams] = await Promise.all([
+        fetchCoaches(orgId),
+        fetchCoachTeams(orgId),
+      ]);
+      // Guard against the org changing mid-fetch
+      if (currentOrg?.id !== orgId) return;
+      setCoaches(fetchedCoaches);
+      setCoachTeams(fetchedCoachTeams);
+      console.log('[coachSync] refreshed', fetchedCoaches.length, 'coaches and', fetchedCoachTeams.length, 'team assignments');
+    } catch (err) {
+      console.warn('[coachSync] refresh failed:', err);
+    }
+  }, [currentOrg?.id]);
+
   const addCoach = useCallback(
     async (
       input: Omit<Coach, 'id' | 'checkedIn' | 'checkedInAt'>,
@@ -2694,6 +2715,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     photoUploadPendingCount: photoUploadQueue.length,
     coaches,
     coachTeams,
+    refreshCoaches,
     updateCoach,
     addCoach,
     deleteCoach,
@@ -2716,7 +2738,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     cloudQueue, isCloudSyncing, isOnline, lastCloudSyncedAt, lastCloudSyncResult,
     flushCloudQueueNow, forceSyncAllToCloud, refreshRosterFromCloud,
     enqueuePhotoUpload, flushPhotoQueueNow, photoUploadQueue.length,
-    coaches, coachTeams, updateCoach, addCoach, deleteCoach, setCoachTeamAssignments,
+    coaches, coachTeams, refreshCoaches, updateCoach, addCoach, deleteCoach, setCoachTeamAssignments,
   ]);
 });
 
