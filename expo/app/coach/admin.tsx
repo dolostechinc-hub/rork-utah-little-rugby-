@@ -26,6 +26,7 @@ import {
   X,
   Check,
   Pencil,
+  Filter,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useRegistration } from '@/contexts/RegistrationContext';
@@ -79,6 +80,7 @@ export default function CoachAdminScreen() {
   const [isCertified, setIsCertified] = useState(false);
   const [teamDrafts, setTeamDrafts] = useState<TeamAssignmentDraft[]>([]);
   const [showTeamPicker, setShowTeamPicker] = useState(false);
+  const [teamPickerClubFilter, setTeamPickerClubFilter] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Available teams derived from players (the actual roster contexts)
@@ -103,6 +105,23 @@ export default function CoachAdminScreen() {
     );
   }, [players]);
 
+  // Unique clubs for team picker filter
+  const uniqueClubs = useMemo<string[]>(() => {
+    const set = new Set<string>();
+    for (const t of availableTeams) {
+      const club = (t.club || '').trim();
+      if (club) set.add(club);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [availableTeams]);
+
+  // Filter available teams by selected club
+  const filteredAvailableTeams = useMemo(() => {
+    if (!teamPickerClubFilter) return availableTeams;
+    const target = teamPickerClubFilter.toLowerCase();
+    return availableTeams.filter((t) => (t.club || '').toLowerCase() === target);
+  }, [availableTeams, teamPickerClubFilter]);
+
   const sortedCoaches = useMemo(
     () =>
       [...coaches].sort((a, b) =>
@@ -119,6 +138,7 @@ export default function CoachAdminScreen() {
     setPhotoUri(null);
     setIsCertified(false);
     setTeamDrafts([]);
+    setTeamPickerClubFilter(null);
   }, []);
 
   const openAdd = useCallback(() => {
@@ -207,6 +227,10 @@ export default function CoachAdminScreen() {
   const handleSave = useCallback(async () => {
     if (!firstName.trim() || !lastName.trim()) {
       Alert.alert('Missing Info', 'Please enter both first and last name.');
+      return;
+    }
+    if (!photoUri) {
+      Alert.alert('Photo Required', 'Please add a photo of the coach before saving.');
       return;
     }
     setSaving(true);
@@ -419,7 +443,9 @@ export default function CoachAdminScreen() {
                   <Camera size={14} color={Colors.white} />
                 </View>
               </TouchableOpacity>
-              <Text style={styles.photoHint}>Tap to set photo</Text>
+              <Text style={styles.photoHint}>
+                Tap to set photo <Text style={styles.requiredStar}>*</Text>
+              </Text>
             </View>
 
             {/* Name */}
@@ -510,27 +536,82 @@ export default function CoachAdminScreen() {
         visible={showTeamPicker}
         animationType="slide"
         transparent={false}
-        onRequestClose={() => setShowTeamPicker(false)}
+        onRequestClose={() => { setShowTeamPicker(false); setTeamPickerClubFilter(null); }}
       >
         <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
           <TouchableOpacity
-            onPress={() => setShowTeamPicker(false)}
+            onPress={() => { setShowTeamPicker(false); setTeamPickerClubFilter(null); }}
             style={styles.backBtn}
           >
             <X size={24} color={Colors.white} />
           </TouchableOpacity>
           <Text style={styles.title}>Select Teams</Text>
         </View>
+
+        {/* Club filter */}
+        {uniqueClubs.length > 1 && (
+          <View style={styles.clubFilterBar}>
+            <Filter size={14} color={Colors.textMuted} />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.clubFilterScroll}
+            >
+              <TouchableOpacity
+                style={[
+                  styles.clubFilterChip,
+                  !teamPickerClubFilter && styles.clubFilterChipActive,
+                ]}
+                onPress={() => setTeamPickerClubFilter(null)}
+              >
+                <Text
+                  style={[
+                    styles.clubFilterChipText,
+                    !teamPickerClubFilter && styles.clubFilterChipTextActive,
+                  ]}
+                >
+                  All Clubs
+                </Text>
+              </TouchableOpacity>
+              {uniqueClubs.map((club) => (
+                <TouchableOpacity
+                  key={club}
+                  style={[
+                    styles.clubFilterChip,
+                    teamPickerClubFilter === club && styles.clubFilterChipActive,
+                  ]}
+                  onPress={() =>
+                    setTeamPickerClubFilter(
+                      teamPickerClubFilter === club ? null : club,
+                    )
+                  }
+                >
+                  <Text
+                    style={[
+                      styles.clubFilterChipText,
+                      teamPickerClubFilter === club && styles.clubFilterChipTextActive,
+                    ]}
+                  >
+                    {club}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-          {availableTeams.length === 0 ? (
+          {filteredAvailableTeams.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateTitle}>No teams found</Text>
               <Text style={styles.emptyStateSub}>
-                Teams come from your imported player roster. Import players first, then assign coaches.
+                {teamPickerClubFilter
+                  ? `No teams for ${teamPickerClubFilter}. Try a different club.`
+                  : 'Teams come from your imported player roster. Import players first, then assign coaches.'}
               </Text>
             </View>
           ) : (
-            availableTeams.map((t) => {
+            filteredAvailableTeams.map((t) => {
               const k = teamKey(t);
               const selected = teamDrafts.some((d) => teamKey(d) === k);
               return (
@@ -540,9 +621,12 @@ export default function CoachAdminScreen() {
                   onPress={() => toggleTeamDraft(t)}
                 >
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.pickerName}>{t.teamName}</Text>
+                    <Text style={styles.pickerName}>
+                      {t.club} {t.ageGroup} {t.teamName}
+                    </Text>
                     <Text style={styles.pickerMeta}>
-                      {t.club} • {t.ageGroup} • {t.division}
+                      {t.division}{' '}
+                      {t.division ? '•' : ''} {t.club} {t.ageGroup}
                     </Text>
                   </View>
                   {selected && <Check size={20} color={Colors.success} />}
@@ -648,6 +732,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.surface,
   },
   photoHint: { fontSize: 13, color: Colors.textMuted, marginTop: 8 },
+  requiredStar: { color: '#dc2626', fontWeight: '700' as const },
   formSection: { marginBottom: 20 },
   label: {
     fontSize: 13,
@@ -717,4 +802,39 @@ const styles = StyleSheet.create({
   pickerRowSelected: { borderColor: Colors.success, backgroundColor: Colors.successLight },
   pickerName: { fontSize: 15, fontWeight: '600' as const, color: Colors.text },
   pickerMeta: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  clubFilterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: 8,
+  },
+  clubFilterScroll: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingRight: 16,
+  },
+  clubFilterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 18,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  clubFilterChipActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  clubFilterChipText: {
+    fontSize: 13,
+    fontWeight: '500' as const,
+    color: Colors.text,
+  },
+  clubFilterChipTextActive: {
+    color: Colors.white,
+    fontWeight: '600' as const,
+  },
 });
