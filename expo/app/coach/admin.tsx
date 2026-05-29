@@ -33,6 +33,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useRegistration } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
 import CoachCSVImportModal, { type ParsedCoach } from '@/components/CoachCSVImportModal';
+import FilterDropdown from '@/components/FilterDropdown';
 import Colors from '@/constants/colors';
 import type { Coach, CoachTeam, Player } from '@/types';
 
@@ -66,6 +67,7 @@ export default function CoachAdminScreen() {
     coaches,
     coachTeams,
     players,
+    clubs: canonicalClubs,
     addCoach,
     deleteCoach,
     setCoachTeamAssignments,
@@ -87,6 +89,7 @@ export default function CoachAdminScreen() {
   const [showTeamPicker, setShowTeamPicker] = useState(false);
   const [teamPickerClubFilter, setTeamPickerClubFilter] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [coachClub, setCoachClub] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
 
   // Available teams derived from players (the actual roster contexts)
@@ -111,6 +114,11 @@ export default function CoachAdminScreen() {
     );
   }, [players]);
 
+  // Clubs for the form dropdown — canonical list from RegistrationContext
+  const clubDropdownOptions = useMemo<string[]>(() => {
+    return (canonicalClubs as unknown as { name: string }[]).map((c) => c.name);
+  }, [canonicalClubs]);
+
   // Unique clubs for team picker filter
   const uniqueClubs = useMemo<string[]>(() => {
     const set = new Set<string>();
@@ -121,12 +129,13 @@ export default function CoachAdminScreen() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [availableTeams]);
 
-  // Filter available teams by selected club
+  // Filter available teams by selected club (from either the form club or the picker filter)
+  const activeClubFilter = teamPickerClubFilter ?? coachClub;
   const filteredAvailableTeams = useMemo(() => {
-    if (!teamPickerClubFilter) return availableTeams;
-    const target = teamPickerClubFilter.toLowerCase();
+    if (!activeClubFilter) return availableTeams;
+    const target = activeClubFilter.toLowerCase();
     return availableTeams.filter((t) => (t.club || '').toLowerCase() === target);
-  }, [availableTeams, teamPickerClubFilter]);
+  }, [availableTeams, activeClubFilter]);
 
   const sortedCoaches = useMemo(
     () =>
@@ -145,6 +154,7 @@ export default function CoachAdminScreen() {
     setIsCertified(false);
     setTeamDrafts([]);
     setTeamPickerClubFilter(null);
+    setCoachClub(null);
   }, []);
 
   const openAdd = useCallback(() => {
@@ -169,6 +179,10 @@ export default function CoachAdminScreen() {
           teamName: ct.teamName,
         }));
       setTeamDrafts(assignments);
+      // Pre-select club from first assignment, auto-filter team picker
+      const firstClub = assignments[0]?.club || null;
+      setCoachClub(firstClub);
+      setTeamPickerClubFilter(firstClub);
     },
     [coachTeams],
   );
@@ -504,13 +518,40 @@ export default function CoachAdminScreen() {
               </TouchableOpacity>
             </View>
 
+            {/* Club selection */}
+            <View style={styles.formSection}>
+              <Text style={styles.label}>Club</Text>
+              <FilterDropdown
+                label="Club"
+                value={coachClub}
+                options={clubDropdownOptions}
+                onSelect={(v) => {
+                  setCoachClub(v);
+                  // Auto-filter team picker and clear teams from other clubs
+                  setTeamPickerClubFilter(v);
+                  if (v) {
+                    setTeamDrafts((prev) =>
+                      prev.filter((t) => (t.club || '').toLowerCase() === v.toLowerCase()),
+                    );
+                  }
+                }}
+                placeholder="Select Club"
+              />
+            </View>
+
             {/* Team assignments */}
             <View style={styles.formSection}>
               <View style={styles.assignHeader}>
                 <Text style={styles.label}>Team Assignments</Text>
                 <TouchableOpacity
-                  style={styles.assignBtn}
-                  onPress={() => setShowTeamPicker(true)}
+                  style={[styles.assignBtn, !coachClub && styles.assignBtnDisabled]}
+                  onPress={() => {
+                    if (!coachClub) {
+                      Alert.alert('Select Club First', 'Please select a club before assigning teams.');
+                      return;
+                    }
+                    setShowTeamPicker(true);
+                  }}
                 >
                   <Plus size={16} color={Colors.primary} />
                   <Text style={styles.assignBtnText}>Add Team</Text>
@@ -545,16 +586,18 @@ export default function CoachAdminScreen() {
         visible={showTeamPicker}
         animationType="slide"
         transparent={false}
-        onRequestClose={() => { setShowTeamPicker(false); setTeamPickerClubFilter(null); }}
+        onRequestClose={() => { setShowTeamPicker(false); }}
       >
         <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
           <TouchableOpacity
-            onPress={() => { setShowTeamPicker(false); setTeamPickerClubFilter(null); }}
+            onPress={() => { setShowTeamPicker(false); }}
             style={styles.backBtn}
           >
             <X size={24} color={Colors.white} />
           </TouchableOpacity>
-          <Text style={styles.title}>Select Teams</Text>
+          <Text style={styles.title}>
+            Select Teams{coachClub ? ` — ${coachClub}` : ''}
+          </Text>
         </View>
 
         {/* Club filter */}
@@ -614,8 +657,8 @@ export default function CoachAdminScreen() {
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateTitle}>No teams found</Text>
               <Text style={styles.emptyStateSub}>
-                {teamPickerClubFilter
-                  ? `No teams for ${teamPickerClubFilter}. Try a different club.`
+                {activeClubFilter
+                  ? `No teams for ${activeClubFilter}. Try a different club.`
                   : 'Teams come from your imported player roster. Import players first, then assign coaches.'}
               </Text>
             </View>
@@ -801,6 +844,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   assignBtnText: { fontSize: 13, fontWeight: '600' as const, color: Colors.primary },
+  assignBtnDisabled: { opacity: 0.4 },
   emptyAssign: { fontSize: 13, color: Colors.textMuted, fontStyle: 'italic' as const, padding: 8 },
   teamChip: {
     flexDirection: 'row',
