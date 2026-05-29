@@ -32,7 +32,7 @@ import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
 import { Player, RestrictionStatus, Coach } from '@/types';
 import { playerHasTeam } from '@/utils/teamAssignments';
-import { getRestrictionStatusLabel, getRestrictionStatusColor, isActuallyPlayingUp } from '@/utils/playerUtils';
+import { getRestrictionStatusLabel, getRestrictionStatusColor, isActuallyPlayingUp, normalizeAgeGroup } from '@/utils/playerUtils';
 
 // Don't re-pull the cloud roster on every focus event -- tab-switching
 // would hammer Supabase. 10 seconds is short enough that returning from
@@ -139,11 +139,10 @@ export default function RosterScreen() {
       result = result.filter(p => clubFilterKey(p.club) === target);
     }
     if (selectedAgeGroup) {
-      const normalizeAge = (s: string) => s.toUpperCase().replace(/\s+/g, '').replace(/^(\d+)U$/, 'U$1');
-      const target = normalizeAge(selectedAgeGroup);
+      const target = normalizeAgeGroup(selectedAgeGroup);
       result = result.filter(p => {
         const effectiveAgeGroup = p.ageGroup || p.calculatedAgeGroup || '';
-        return normalizeAge(effectiveAgeGroup) === target;
+        return normalizeAgeGroup(effectiveAgeGroup) === target;
       });
     }
     if (selectedDivision) {
@@ -280,17 +279,15 @@ export default function RosterScreen() {
   }, [handlePlayerPress]);
 
   const availableTeams = useMemo(() => {
-    const normalizeAge = (s: string | null | undefined) =>
-      (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
     const normalize = (s: string | null | undefined) => (s || '').toString().trim().toLowerCase();
 
     const targetClub = clubFilterKey(selectedClub);
-    const targetAge = normalizeAge(selectedAgeGroup);
+    const targetAge = normalizeAgeGroup(selectedAgeGroup);
     const targetDivision = normalize(selectedDivision);
 
     const filtered = teamNames.filter((t) => {
       if (targetClub && clubFilterKey(t.club) !== targetClub) return false;
-      if (targetAge && normalizeAge(t.ageGroup) !== targetAge) return false;
+      if (targetAge && normalizeAgeGroup(t.ageGroup) !== targetAge) return false;
       if (targetDivision && normalize(t.division) !== targetDivision) return false;
       return true;
     });

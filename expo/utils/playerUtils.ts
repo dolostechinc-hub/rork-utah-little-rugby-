@@ -10,12 +10,22 @@ export const AGE_GROUP_CUTOFFS = {
 
 export const WEIGHT_LIMITS: Record<string, number> = {
   'U8': 100,
-  '8U': 100,
   'U10': 120,
-  '10U': 120,
   'U12': 140,
-  '12U': 140,
 };
+
+/**
+ * Normalizes an age-group string to the canonical "U" + number format.
+ * Accepts both "U10" and "10U" (as well as "u10", "10u", " U10 ", etc.).
+ * Returns an empty string for unrecognizable inputs.
+ */
+export function normalizeAgeGroup(raw: string | null | undefined): string {
+  const cleaned = (raw || '').toString().toUpperCase().replace(/\s+/g, '');
+  if (!cleaned) return '';
+  const match = cleaned.match(/(\d{1,2})/);
+  if (match) return `U${parseInt(match[1], 10)}`;
+  return cleaned;
+}
 
 export function parseDateOfBirth(dob: string): Date | null {
   if (!dob) return null;
@@ -62,8 +72,7 @@ export function calculateAgeGroup(dateOfBirth: string): string | null {
 }
 
 export function getWeightLimit(ageGroup: string): number | null {
-  const normalizedAgeGroup = ageGroup.toUpperCase().replace(/\s+/g, '');
-  return WEIGHT_LIMITS[normalizedAgeGroup] || null;
+  return WEIGHT_LIMITS[normalizeAgeGroup(ageGroup)] || null;
 }
 
 export function checkWeightRestriction(
@@ -91,11 +100,9 @@ export function checkWeightRestriction(
 
 export function getNextAgeGroup(currentAgeGroup: string): string | null {
   const ageGroupOrder = ['U6', 'U8', 'U10', 'U12', 'U14'];
-  const normalizedCurrent = currentAgeGroup.toUpperCase().replace(/\s+/g, '');
+  const normalizedCurrent = normalizeAgeGroup(currentAgeGroup);
   
-  const currentIndex = ageGroupOrder.findIndex(
-    ag => ag === normalizedCurrent || ag.replace('U', '') === normalizedCurrent.replace('U', '')
-  );
+  const currentIndex = ageGroupOrder.findIndex(ag => ag === normalizedCurrent);
   
   if (currentIndex === -1 || currentIndex === ageGroupOrder.length - 1) {
     return null;

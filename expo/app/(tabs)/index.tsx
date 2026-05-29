@@ -22,6 +22,7 @@ import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
 import { useRouter } from 'expo-router';
 import { playerHasTeam } from '@/utils/teamAssignments';
+import { normalizeAgeGroup } from '@/utils/playerUtils';
 
 // FilterDropdown identifies its rows by `id` and surfaces `name` to the
 // user. The names here are matched against in the onSelect handler to
@@ -99,21 +100,14 @@ export default function CheckInScreen() {
     let result = players;
 
     const normalizeStr = (v: string | undefined | null) => (v || '').toString().trim().toLowerCase();
-    const normalizeAge = (v: string | undefined | null): string => {
-      const raw = (v || '').toString().toUpperCase();
-      if (!raw.trim()) return '';
-      const match = raw.match(/(\d{1,2})/);
-      if (match) return `U${parseInt(match[1], 10)}`;
-      return raw.replace(/\s+/g, '');
-    };
 
     if (filters.club) {
       const target = clubFilterKey(filters.club);
       result = result.filter((p) => clubFilterKey(p.club) === target);
     }
     if (filters.ageGroup) {
-      const target = normalizeAge(filters.ageGroup);
-      result = result.filter((p) => normalizeAge(p.ageGroup || p.calculatedAgeGroup || '') === target);
+      const target = normalizeAgeGroup(filters.ageGroup);
+      result = result.filter((p) => normalizeAgeGroup(p.ageGroup || p.calculatedAgeGroup || '') === target);
     }
     if (filters.division) {
       const target = normalizeStr(filters.division);
@@ -152,17 +146,16 @@ export default function CheckInScreen() {
 
   // Cascade team options based on selected club, age group, and division
   const teamNames = useMemo(() => {
-    const normalizeAge = (s: string | null | undefined) =>
-      (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
+
     const normalize = (s: string | null | undefined) => (s || '').toString().trim().toLowerCase();
 
     const targetClub = clubFilterKey(filters.club);
-    const targetAge = normalizeAge(filters.ageGroup);
+    const targetAge = normalizeAgeGroup(filters.ageGroup);
     const targetDivision = normalize(filters.division);
 
     const filtered = teams.filter((t) => {
       if (targetClub && clubFilterKey(t.club) !== targetClub) return false;
-      if (targetAge && normalizeAge(t.ageGroup) !== targetAge) return false;
+      if (targetAge && normalizeAgeGroup(t.ageGroup) !== targetAge) return false;
       if (targetDivision && normalize(t.division) !== targetDivision) return false;
       return true;
     });

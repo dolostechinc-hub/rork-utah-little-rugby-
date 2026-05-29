@@ -4,6 +4,7 @@ import { Users } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import type { Coach, CoachTeam } from '@/types';
 import CoachCard from './CoachCard';
+import { normalizeAgeGroup } from '@/utils/playerUtils';
 
 // Same club normalization used by roster and check-in screens so filter
 // values match coach_teams rows regardless of "Little " prefix or aliases.
@@ -54,18 +55,11 @@ function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSecti
 
     const normalizeStr = (v: string | null | undefined) =>
       (v || '').toString().trim().toLowerCase();
-    const normalizeAge = (v: string | null | undefined): string => {
-      const raw = (v || '').toString().toUpperCase();
-      if (!raw.trim()) return '';
-      const match = raw.match(/(\d{1,2})/);
-      if (match) return `U${parseInt(match[1], 10)}`;
-      return raw.replace(/\s+/g, '');
-    };
 
     // Apply the same canonicalClubName normalisation that ctClubKey uses
     // so that "Little Brighton" in the filter matches "Brighton" in coach_teams.
     const targetClub = canonicalClubName(filters.club).toLowerCase();
-    const targetAge = normalizeAge(filters.ageGroup);
+    const targetAge = normalizeAgeGroup(filters.ageGroup);
     const targetDivision = normalizeStr(filters.division);
 
     // Normalize coach_teams club the same way the roster screen does so
@@ -78,7 +72,7 @@ function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSecti
     const matchingCoachIds = new Set<string>();
     for (const ct of coachTeams) {
       if (targetClub && ctClubKey(ct.club) !== targetClub) continue;
-      if (targetAge && normalizeAge(ct.ageGroup) !== targetAge) continue;
+      if (targetAge && normalizeAgeGroup(ct.ageGroup) !== targetAge) continue;
       if (targetDivision && normalizeStr(ct.division) !== targetDivision) continue;
       if (filters.teamName) {
         const teamTarget = normalizeStr(filters.teamName);

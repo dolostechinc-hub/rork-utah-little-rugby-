@@ -13,6 +13,7 @@ import {
 import { X, Users, Plus, Check } from 'lucide-react-native';
 import Colors from '@/constants/colors';
 import { parseTeamAssignments, serializeTeamAssignments } from '@/utils/teamAssignments';
+import { normalizeAgeGroup } from '@/utils/playerUtils';
 
 export interface TeamOption {
   id: string;
@@ -52,16 +53,15 @@ export default function TeamAssignmentModal({
     }
   }, [currentTeamName, visible]);
 
-  const normalizeAge = (s: string | undefined | null) =>
-    (s || '').toString().toUpperCase().replace(/\s+/g, '').replace(/^U(\d+)$/, '$1U').replace(/^(\d+)U$/, '$1U');
+
 
   const suggestedTeams = useMemo(() => {
     const normClub = (playerClub || '').trim().toLowerCase();
-    const normAge = normalizeAge(playerAgeGroup);
+    const normAge = normalizeAgeGroup(playerAgeGroup);
 
     const matches = allTeams.filter((t) => {
       const teamClub = (t.club || '').trim().toLowerCase();
-      const teamAge = normalizeAge(t.ageGroup);
+      const teamAge = normalizeAgeGroup(t.ageGroup);
       if (normClub && teamClub && teamClub !== normClub) return false;
       if (normAge && teamAge && teamAge !== normAge) return false;
       return true;

@@ -56,6 +56,7 @@ import {
 } from '@/lib/eventModeSync';
 import { fetchSheetCsv, parseCSV } from '@/lib/googleSheetsCsv';
 import { parseTeamAssignments, playerHasTeam } from '@/utils/teamAssignments';
+import { normalizeAgeGroup } from '@/utils/playerUtils';
 import {
   fetchCoaches,
   fetchCoachTeams,
@@ -2123,15 +2124,6 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     let result = players;
 
     const normalizeStr = (s: string | undefined | null) => (s || '').toString().trim().toLowerCase();
-    const normalizeAge = (s: string | undefined | null): string => {
-      const raw = (s || '').toString().toUpperCase();
-      if (!raw.trim()) return '';
-      const match = raw.match(/(\d{1,2})/);
-      if (match) {
-        return `U${parseInt(match[1], 10)}`;
-      }
-      return raw.replace(/\s+/g, '');
-    };
 
     console.log('[Filter] applying filters:', {
       club: filters.club,
@@ -2147,10 +2139,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       console.log('[Filter] after club filter:', result.length);
     }
     if (filters.ageGroup) {
-      const target = normalizeAge(filters.ageGroup);
+      const target = normalizeAgeGroup(filters.ageGroup);
       result = result.filter(p => {
         const effectiveAgeGroup = p.ageGroup || p.calculatedAgeGroup || '';
-        return normalizeAge(effectiveAgeGroup) === target;
+        return normalizeAgeGroup(effectiveAgeGroup) === target;
       });
       console.log('[Filter] after age filter:', result.length, 'target:', target);
     }
