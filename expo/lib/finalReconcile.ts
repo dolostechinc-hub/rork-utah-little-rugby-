@@ -91,25 +91,18 @@ async function gatherLocalPlayersForOrgs(
   }
 }
 
-async function findCloudOrgIdsByCode(code: string, fallbackId: string): Promise<string[]> {
-  const ids = new Set<string>();
-  ids.add(fallbackId);
-  try {
-    const { data, error } = await supabase
-      .from('organizations')
-      .select('id, code')
-      .ilike('code', code.toUpperCase().trim());
-    if (error) {
-      console.warn('[finalReconcile] cloud org lookup failed:', error.message);
-    } else {
-      for (const row of (data ?? []) as { id: string }[]) {
-        if (row.id) ids.add(row.id);
-      }
-    }
-  } catch (err) {
-    console.warn('[finalReconcile] cloud org lookup threw:', err);
-  }
-  return Array.from(ids);
+// IMPORTANT: reconcile is intentionally scoped to ONLY the canonical org.
+//
+// This function used to look up every cloud org that shared the same invite
+// code and merge all of their rosters (plus any matching local caches) into
+// the org the user is currently on. That "cross-org merge by code" is exactly
+// what let stale data from a retired/duplicate org get pulled into the live
+// org. Per the admin's requirement, the live org is now the single source of
+// truth: only data already in the current org's cloud roster (plus edits made
+// from this device today onward) is used. We never reach into other orgs that
+// happen to share the code.
+async function findCloudOrgIdsByCode(_code: string, fallbackId: string): Promise<string[]> {
+  return [fallbackId];
 }
 
 async function pullAllCloudRosters(orgIds: string[]): Promise<Player[]> {
