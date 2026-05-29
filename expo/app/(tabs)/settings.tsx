@@ -2221,19 +2221,6 @@ export default function SettingsScreen() {
                 </Text>
               )}
               <View style={styles.connectedActions}>
-                <TouchableOpacity
-                  style={[styles.refreshButton, isFetching && styles.refreshButtonDisabled]}
-                  onPress={handleRefreshData}
-                  activeOpacity={0.7}
-                  disabled={isFetching}
-                >
-                  {isFetching ? (
-                    <ActivityIndicator size={18} color={Colors.primary} />
-                  ) : (
-                    <RefreshCw size={18} color={Colors.primary} />
-                  )}
-                  <Text style={styles.refreshButtonText}>{isFetching ? 'Syncing...' : 'Refresh Data'}</Text>
-                </TouchableOpacity>
                 {isAdmin && (
                   <TouchableOpacity
                     style={styles.disconnectButton}
