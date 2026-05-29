@@ -946,6 +946,111 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     }
   }, [currentOrg?.id]);
 
+  // ── Bulk coach import ─────────────────────────────────────────────────────
+  // Accepts parsed rows from a CSV/Google Sheet and creates Coach + CoachTeam
+  // records. Coaches that match an existing coach (by first + last name) are
+  // skipped silently so re-importing the same sheet is idempotent.
+  const importCoaches = useCallback(
+    async (
+      rows: {
+        firstName: string;
+        lastName: string;
+        club: string;
+        ageGroup: string;
+        division: string;
+        teamName: string;
+        isCertified: boolean;
+      }[],
+    ): Promise<{ created: number; skipped: number }> => {
+      if (!currentOrg?.id || rows.length === 0) return { created: 0, skipped: 0 };
+      const orgId = currentOrg.id;
+
+      // Build lookup of existing coaches by normalised full name
+      const existingNames = new Set(
+        coaches.map((c) => `${c.firstName.trim().toLowerCase()} ${c.lastName.trim().toLowerCase()}`),
+      );
+
+      let created = 0;
+      let skipped = 0;
+      const newCoaches: Coach[] = [];
+      const newTeams: CoachTeam[] = [];
+
+      for (const row of rows) {
+        const nameKey = `${(row.firstName || '').trim().toLowerCase()} ${(row.lastName || '').trim().toLowerCase()}`;
+        if (existingNames.has(nameKey) || !row.firstName?.trim() || !row.lastName?.trim()) {
+          skipped++;
+          continue;
+        }
+        existingNames.add(nameKey); // prevent duplicates within the batch too
+
+        const coachId = randomId('coach');
+        const newCoach: Coach = {
+          id: coachId,
+          firstName: row.firstName.trim(),
+          lastName: row.lastName.trim(),
+          photoUri: null,
+          isCertified: !!row.isCertified,
+          checkedIn: false,
+          checkedInAt: null,
+        };
+        newCoaches.push(newCoach);
+
+        if ((row.teamName || '').trim()) {
+          newTeams.push({
+            id: `${coachId}_${(row.teamName || '').replace(/\s+/g, '_').toLowerCase()}`,
+            coachId,
+            orgId,
+            club: (row.club || '').trim(),
+            ageGroup: (row.ageGroup || '').trim(),
+            division: (row.division || '').trim(),
+            teamName: (row.teamName || '').trim(),
+          });
+        }
+        created++;
+      }
+
+      if (created === 0) return { created: 0, skipped };
+
+      // Optimistic update
+      setCoaches((prev) => [...prev, ...newCoaches]);
+      setCoachTeams((prev) => [...prev, ...newTeams]);
+
+      try {
+        // Upsert all coaches
+        await Promise.all(newCoaches.map((c) => upsertCoach(orgId, c)));
+        // Upsert team assignments per coach (coachSync.upsertCoachTeams uses delete+insert pattern)
+        for (const nc of newCoaches) {
+          const coachTeams2 = newTeams.filter((t) => t.coachId === nc.id);
+          if (coachTeams2.length > 0) {
+            const assignments: Omit<CoachTeam, 'id' | 'coachId' | 'orgId'>[] = coachTeams2.map(
+              ({ club, ageGroup, division, teamName }) => ({
+                club,
+                ageGroup,
+                division,
+                teamName,
+              }),
+            );
+            await upsertCoachTeams(orgId, nc.id, assignments);
+          }
+        }
+        console.log('[coachSync] imported', created, 'coaches, skipped', skipped);
+      } catch (err) {
+        console.warn('[coachSync] import failed, reverting:', err);
+        // Revert on failure by re-fetching from Supabase
+        try {
+          const fresh = await fetchCoaches(orgId);
+          const freshTeams = await fetchCoachTeams(orgId);
+          setCoaches(fresh);
+          setCoachTeams(freshTeams);
+        } catch (_) {}
+        throw err;
+      }
+
+      return { created, skipped };
+    },
+    [currentOrg?.id, coaches],
+  );
+
   // ---------------------------------------------------------------------------
   // Cross-device event_mode sync.
   // The admin's lock / unlock flips a column on `organizations` in Supabase.
@@ -2730,7 +2835,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     cloudQueue, isCloudSyncing, isOnline, lastCloudSyncedAt, lastCloudSyncResult,
     flushCloudQueueNow, forceSyncAllToCloud, refreshRosterFromCloud,
     enqueuePhotoUpload, flushPhotoQueueNow, photoUploadQueue.length,
-    coaches, coachTeams, refreshCoaches, updateCoach, addCoach, deleteCoach, setCoachTeamAssignments,
+    coaches, coachTeams, refreshCoaches, updateCoach, addCoach, deleteCoach, setCoachTeamAssignments, importCoaches,
   ]);
 });
 

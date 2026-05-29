@@ -27,10 +27,12 @@ import {
   Check,
   Pencil,
   Filter,
+  Upload,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useRegistration } from '@/contexts/RegistrationContext';
 import { useAuth } from '@/contexts/AuthContext';
+import CoachCSVImportModal, { type ParsedCoach } from '@/components/CoachCSVImportModal';
 import Colors from '@/constants/colors';
 import type { Coach, CoachTeam, Player } from '@/types';
 
@@ -59,7 +61,7 @@ function teamKey(t: { club: string; ageGroup: string; division: string; teamName
 export default function CoachAdminScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { isAdmin, canEdit } = useAuth();
   const {
     coaches,
     coachTeams,
@@ -68,7 +70,10 @@ export default function CoachAdminScreen() {
     deleteCoach,
     setCoachTeamAssignments,
     updateCoach,
-  } = useRegistration() as unknown as CoachAdminAPI;
+    importCoaches,
+  } = useRegistration() as unknown as CoachAdminAPI & {
+    importCoaches: (rows: ParsedCoach[]) => Promise<{ created: number; skipped: number }>;
+  };
 
   const [editingCoachId, setEditingCoachId] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -82,6 +87,7 @@ export default function CoachAdminScreen() {
   const [showTeamPicker, setShowTeamPicker] = useState(false);
   const [teamPickerClubFilter, setTeamPickerClubFilter] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showImport, setShowImport] = useState(false);
 
   // Available teams derived from players (the actual roster contexts)
   const availableTeams = useMemo<TeamAssignmentDraft[]>(() => {
@@ -301,7 +307,7 @@ export default function CoachAdminScreen() {
     [deleteCoach],
   );
 
-  if (!isAdmin) {
+  if (!canEdit) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.header}>
@@ -312,7 +318,7 @@ export default function CoachAdminScreen() {
         </View>
         <View style={styles.emptyContainer}>
           <Shield size={48} color={Colors.textMuted} />
-          <Text style={styles.emptyText}>Admin access required.</Text>
+          <Text style={styles.emptyText}>Edit access required to manage coaches.</Text>
         </View>
       </View>
     );
@@ -327,6 +333,9 @@ export default function CoachAdminScreen() {
         <Text style={styles.title}>Manage Coaches</Text>
         <TouchableOpacity onPress={openAdd} style={styles.addBtn}>
           <Plus size={22} color={Colors.white} />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => setShowImport(true)} style={styles.importBtn}>
+          <Upload size={20} color={Colors.white} />
         </TouchableOpacity>
       </View>
 
@@ -636,6 +645,13 @@ export default function CoachAdminScreen() {
           )}
         </ScrollView>
       </Modal>
+
+      {/* Coach CSV import modal */}
+      <CoachCSVImportModal
+        visible={showImport}
+        onClose={() => setShowImport(false)}
+        onImport={importCoaches}
+      />
     </View>
   );
 }
@@ -666,6 +682,15 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.2)',
     marginLeft: 'auto',
+  },
+  importBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    marginLeft: 8,
   },
   title: { fontSize: 20, fontWeight: '700' as const, color: Colors.white },
   scroll: { flex: 1 },
