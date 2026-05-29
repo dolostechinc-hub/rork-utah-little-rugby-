@@ -35,7 +35,21 @@ export function getEditorSession(): EditorSession | null {
   return memorySession;
 }
 
-export async function loadEditorSession(): Promise<EditorSession | null> {
+export interface LoadEditorSessionOptions {
+  /** Skip the remote validation round-trip — use the locally-cached session
+   *  as long as it hasn't expired. Defaults to false (validate remotely). */
+  validateRemote?: boolean;
+  /** Abort the remote validation after this many ms. Defaults to 8000.
+   *  Only used when validateRemote is true. */
+  timeoutMs?: number;
+}
+
+export async function loadEditorSession(
+  opts: LoadEditorSessionOptions = {},
+): Promise<EditorSession | null> {
+  const validateRemote = opts.validateRemote ?? true;
+  const timeoutMs = opts.timeoutMs ?? 8000;
+
   try {
     const raw = await AsyncStorage.getItem(SESSION_KEY);
     if (!raw) return null;
@@ -45,27 +59,80 @@ export async function loadEditorSession(): Promise<EditorSession | null> {
       await AsyncStorage.removeItem(SESSION_KEY);
       return null;
     }
-    const { data, error } = await supabase.rpc('validate_editor_session', {
-      p_token: parsed.token,
-    });
-    if (error) {
-      console.warn('validate_editor_session failed:', error.message);
-      return null;
+
+    if (!validateRemote) {
+      // Cold-start fast path: trust the locally-cached session if it hasn't
+      // expired. A background validation will run shortly after.
+      memorySession = parsed;
+      notify();
+      return memorySession;
     }
-    const res = data as { valid?: boolean; org_id?: string; expires_at?: string } | null;
-    if (!res?.valid) {
+
+    // Remote validation with timeout — network errors should NOT invalidate
+    // a locally-valid session (they are transient, not a revocation).
+    let data: { valid?: boolean; org_id?: string; expires_at?: string } | null = null;
+    let rpcError: string | null = null;
+    let isNetworkError = false;
+
+    try {
+      const rpcPromise = supabase.rpc('validate_editor_session', {
+        p_token: parsed.token,
+      });
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), timeoutMs),
+      );
+
+      const result = await Promise.race([rpcPromise, timeoutPromise]);
+
+      if (result.error) {
+        rpcError = result.error.message;
+      } else {
+        data = result.data as typeof data;
+      }
+    } catch (fetchErr) {
+      const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+      // Network-level error (offline, timeout, DNS) — keep the local session.
+      if (/timeout|network|fetch|failed to fetch/i.test(msg)) {
+        isNetworkError = true;
+        console.warn('[editorSession] remote validation unreachable — keeping local session');
+      } else {
+        rpcError = msg;
+      }
+    }
+
+    if (isNetworkError) {
+      memorySession = parsed;
+      notify();
+      return memorySession;
+    }
+
+    if (rpcError) {
+      console.warn('[editorSession] validate_editor_session RPC error:', rpcError);
+      // Treat unknown RPC errors as transient and keep the local session.
+      memorySession = parsed;
+      notify();
+      return memorySession;
+    }
+
+    if (!data?.valid) {
+      // Server explicitly said the session is revoked/expired — clear it.
+      console.log('[editorSession] server says session invalid — clearing');
       await AsyncStorage.removeItem(SESSION_KEY);
+      memorySession = null;
+      notify();
       return null;
     }
+
     memorySession = {
       token: parsed.token,
-      orgId: res.org_id ?? parsed.orgId,
-      expiresAt: res.expires_at ?? parsed.expiresAt,
+      orgId: data.org_id ?? parsed.orgId,
+      expiresAt: data.expires_at ?? parsed.expiresAt,
     };
     notify();
     return memorySession;
   } catch (err) {
-    console.warn('loadEditorSession error:', err);
+    console.warn('[editorSession] loadEditorSession error:', err);
     return null;
   }
 }
