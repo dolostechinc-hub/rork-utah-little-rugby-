@@ -35,18 +35,12 @@ function RootLayoutNav() {
   );
 }
 
-// Wires up the Supabase magic-link redirect on iOS / Android. Web is
-// handled automatically by the Supabase client's `detectSessionInUrl`
-// option, so we only need to listen for incoming URLs natively.
+// Wires up the Supabase magic-link redirect on iOS / Android.
 //
-// The flow:
-//   1. The user taps "Send magic link" in the app, supabase emails them
-//      a URL like `utah-little-rugby://auth-callback#access_token=...`.
-//   2. Tapping that link opens the app and fires a Linking event.
-//   3. We pull the URL out and pass it to `exchangeCodeForSession`,
-//      which decodes the fragment and stores the session in AsyncStorage.
-//   4. Anyone listening to `supabase.auth.onAuthStateChange` (e.g. the
-//      AuthContext) sees the SIGNED_IN event and updates UI accordingly.
+// NOTE: As of migration 032, the app uses OTP-only auth (email template has
+// {{ .Token }}, not {{ .ConfirmationURL }}). This bridge is retained as a
+// no-op safety net — if a magic-link URL ever arrives (e.g. from an older
+// build or a future template change), it will still establish the session.
 function useSupabaseMagicLinkBridge(): void {
   useEffect(() => {
     if (Platform.OS === 'web') {

@@ -3556,7 +3556,7 @@ export default function SettingsScreen() {
                     <Mail size={20} color={Colors.white} />
                   )}
                   <Text style={styles.connectButtonText}>
-                    {signInSubmitting ? 'Sending…' : 'Send Magic Link'}
+                    {signInSubmitting ? 'Sending…' : 'Send Code'}
                   </Text>
                 </TouchableOpacity>
 

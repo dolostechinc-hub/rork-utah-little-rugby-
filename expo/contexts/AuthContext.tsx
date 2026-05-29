@@ -1,6 +1,5 @@
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Linking from 'expo-linking';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   EditorSession,
@@ -115,18 +114,13 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       return { ok: false, error: 'Enter a valid email address.' };
     }
     try {
-      const redirectTo = Linking.createURL('/auth-callback');
-      // Logged so you can confirm in the dev terminal which redirect URL
-      // got sent to Supabase. The URL must be whitelisted under
-      // Authentication → URL Configuration → Redirect URLs in the
-      // Supabase dashboard, otherwise Supabase silently substitutes the
-      // project's Site URL (e.g. http://localhost:3000) and the magic
-      // link will not return you to the app.
-      console.log('[auth] sending magic link', { email: trimmed, redirectTo });
+      // OTP-only flow: no emailRedirectTo, so Supabase sends a 6-digit
+      // code via {{ .Token }} in the email template. verifyEmailOtp()
+      // handles the code entry on the next screen.
+      console.log('[auth] sending OTP code', { email: trimmed });
       const { error } = await supabase.auth.signInWithOtp({
         email: trimmed,
         options: {
-          emailRedirectTo: redirectTo,
           shouldCreateUser: true,
         },
       });
