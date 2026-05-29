@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback } from 'react';
 
-const STORAGE_KEY = 'age_group_rules_links_v1';
+const STORAGE_KEY = 'age_group_rules_links_v2';
 
 export type AgeGroupRulesMap = Record<string, string>;
 
@@ -11,10 +11,10 @@ export const AGE_GROUPS_FOR_RULES: string[] = ['U6', 'U8', 'U10', 'U12', 'U14'];
 
 export const DEFAULT_AGE_GROUP_RULES: AgeGroupRulesMap = {
   U6: 'https://drive.google.com/file/d/1ocfZcsPQaLv984A77TBJjVJAGCBBmTvv/view?usp=drive_link',
-  U8: 'https://drive.google.com/file/d/1CJQW1GRZ5CJmurDjO6oaHVOV7ZgiFoA0/view?usp=drive_link',
-  U10: 'https://drive.google.com/file/d/1FpBKnQXvlnJPiE9hdC8CJbd8ySuEWEKT/view?usp=drive_link',
-  U12: 'https://drive.google.com/file/d/1xXny-80yC86doUaoDJKuLm0JSyC7UdO1/view?usp=drive_link',
-  U14: 'https://drive.google.com/file/d/1x4DBOtcZytvPKm-cRxN9dnlEi6d64baA/view?usp=drive_link',
+  U8: 'https://drive.google.com/file/d/1UIE2JeUphHKWM-TwQwsjeFhS_luo7k-M/view?usp=drive_link',
+  U10: 'https://drive.google.com/file/d/10LIH9_31D3t611T_p0DEisb84Ri7aGde/view?usp=drive_link',
+  U12: 'https://drive.google.com/file/d/1xZFT0zD86oOjMGbO0P4hjPohJf1MbTOX/view?usp=drive_link',
+  U14: 'https://drive.google.com/file/d/14iBkXDLU6jUFEvRixVyTuqzDP_LPJM7F/view?usp=drive_link',
 };
 
 async function loadLinks(): Promise<AgeGroupRulesMap> {
