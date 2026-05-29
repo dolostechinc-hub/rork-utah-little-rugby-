@@ -2835,6 +2835,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     addCoach,
     deleteCoach,
     setCoachTeamAssignments,
+    importCoaches,
   }), [
     players, filteredPlayers, filters, searchQuery, clubs, teams, ageGroups, divisions,
     updatePlayer, addPlayer, importPlayers, importPlayersWithOrgCheck,
