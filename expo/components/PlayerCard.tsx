@@ -48,7 +48,7 @@ function PlayerCard({ player }: PlayerCardProps) {
           <Text style={styles.name}>
             {player.lastName}, {player.firstName}
           </Text>
-          {restrictionStatus === 'penny_player' && (
+          {restrictionStatus === 'penny_player' && !playsUp && (
             <View style={styles.iconBadge}>
               <Shirt size={16} color="#DC2626" fill="#DC2626" fillOpacity={0.2} />
             </View>
@@ -67,7 +67,7 @@ function PlayerCard({ player }: PlayerCardProps) {
         {player.weight ? (
           <Text style={styles.weight}>{player.weight} lbs</Text>
         ) : null}
-        {restrictionStatus && restrictionStatus !== 'none' && (
+        {restrictionStatus && restrictionStatus !== 'none' && !playsUp && (
           <View style={[styles.restrictionBadge, { backgroundColor: getRestrictionStatusColor(restrictionStatus) + '20' }]}>
             <Text style={[styles.restrictionText, { color: getRestrictionStatusColor(restrictionStatus) }]}>
               {getRestrictionStatusLabel(restrictionStatus)}
