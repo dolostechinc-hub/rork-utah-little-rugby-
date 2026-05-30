@@ -129,7 +129,18 @@ function mergePlayerRecords(a: Player, b: Player): Player {
     weight: pick(a.weight ?? '', b.weight ?? '', isEmptyStr),
     checkedIn,
     checkedInAt,
-    restrictionStatus: a.restrictionStatus && a.restrictionStatus !== 'none' ? a.restrictionStatus : (b.restrictionStatus ?? a.restrictionStatus ?? 'none'),
+    // 'none' is a deliberate choice (user cleared the restriction), not
+    // an empty/default. Use nullish coalescing so an explicit 'none' on A
+    // wins over B's 'open_division' / 'penny_player' during roster sync
+    // and cloud conflict resolution. Without this a volunteer who clears
+    // a restriction would see it reappear after the next merge.
+    restrictionStatus: a.restrictionStatus ?? b.restrictionStatus ?? 'none',
+    // playsUp was missing from the merge.  When the remote (B) record has
+    // playsUp=true but the local (A) hasn't loaded it yet (cold launch),
+    // we need to carry B's value forward.  A's value wins when both are
+    // present via the spread above, but explicit handling ensures it
+    // survives the dedupe / cloud-merge paths.
+    playsUp: a.playsUp ?? b.playsUp ?? false,
     calculatedAgeGroup: a.calculatedAgeGroup || b.calculatedAgeGroup,
   };
 }

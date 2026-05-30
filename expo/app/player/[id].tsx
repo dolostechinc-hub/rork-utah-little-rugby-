@@ -212,6 +212,25 @@ export default function PlayerDetailScreen() {
   const handleRestrictionSelect = (status: RestrictionStatus) => {
     setRestrictionStatus(status);
     setShowWeightModal(false);
+
+    // When a coach voluntarily changes the restriction (Special Placement),
+    // auto-save so they don't lose the change.  The overweight path already
+    // saves through handleWeightBlur when the weight input loses focus.
+    if (restrictionModalMode === 'voluntary' && player) {
+      const finalAgeGroup = playsUp && playUpAgeGroup ? playUpAgeGroup : player.ageGroup;
+      void updatePlayer({
+        ...player,
+        isAgeVerified,
+        photoUri: photoUri ?? player.photoUri,
+        weight: (weight.trim() || player.weight || ''),
+        restrictionStatus: status,
+        playsUp,
+        ageGroup: finalAgeGroup || player.ageGroup,
+        calculatedAgeGroup: calculatedAgeGroup || undefined,
+      }).catch((err) => {
+        console.warn('[player] auto-save restriction failed:', err);
+      });
+    }
   };
 
   const handlePlaysUpChange = (next: boolean) => {
@@ -920,7 +939,27 @@ export default function PlayerDetailScreen() {
       {player && (
         <WeightRestrictionModal
           visible={showWeightModal}
-          onClose={() => setShowWeightModal(false)}
+          onClose={() => {
+            setShowWeightModal(false);
+            // Edge case: coach toggled Play Up in voluntary mode and then
+            // dismissed the modal without picking a restriction. Auto-save
+            // so the playsUp / playUpAgeGroup change isn't silently lost.
+            if (restrictionModalMode === 'voluntary' && player) {
+              const finalAgeGroup = playsUp && playUpAgeGroup ? playUpAgeGroup : player.ageGroup;
+              void updatePlayer({
+                ...player,
+                isAgeVerified,
+                photoUri: photoUri ?? player.photoUri,
+                weight: (weight.trim() || player.weight || ''),
+                restrictionStatus,
+                playsUp,
+                ageGroup: finalAgeGroup || player.ageGroup,
+                calculatedAgeGroup: calculatedAgeGroup || undefined,
+              }).catch((err) => {
+                console.warn('[player] auto-save on voluntary close failed:', err);
+              });
+            }
+          }}
           onSelect={handleRestrictionSelect}
           playsUp={playsUp}
           onPlaysUpChange={handlePlaysUpChange}
