@@ -89,6 +89,7 @@ import { LogOut, Mail } from 'lucide-react-native';
 import { useOrganization } from '@/contexts/OrganizationContext';
 import * as Clipboard from 'expo-clipboard';
 import Colors from '@/constants/colors';
+import { randomId } from '@/lib/ids';
 import { fetchSheetCsv, parseCSV as parseCsvShared, extractSpreadsheetId as extractIdShared } from '@/lib/googleSheetsCsv';
 import { useAgeGroupRules, AGE_GROUPS_FOR_RULES } from '@/contexts/AgeGroupRulesContext';
 import { BookOpen, Pencil } from 'lucide-react-native';
@@ -1213,7 +1214,7 @@ export default function SettingsScreen() {
       return;
     }
     
-    const userId = `user-${Date.now()}`;
+    const userId = randomId();
     const result = await joinOrgByCode(orgCodeInput.trim().toUpperCase(), userId, 'Volunteer', '');
     
     if (result) {
@@ -1232,7 +1233,7 @@ export default function SettingsScreen() {
       return;
     }
     
-    const userId = `owner-${Date.now()}`;
+    const userId = randomId();
     const org = await createOrg(newOrgName.trim(), userId);
 
     try {

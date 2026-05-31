@@ -198,12 +198,14 @@ export async function restJoinOrg(params: {
   name: string;
   email: string;
 }): Promise<{ ok: true; org: RemoteOrg | null } | { ok: false; error: string }> {
-  const r = await rpcPost<RemoteOrg[] | RemoteOrg | null>('public_join_org', {
+  const body = {
     p_code: (params.code || '').toUpperCase().trim(),
     p_user_id: params.userId,
     p_name: params.name || 'Volunteer',
     p_email: params.email || '',
-  });
+  };
+  console.log('[restJoinOrg] POST body to public_join_org:', JSON.stringify(body));
+  const r = await rpcPost<RemoteOrg[] | RemoteOrg | null>('public_join_org', body);
   if (!r.ok) return r;
   const row = Array.isArray(r.data) ? (r.data[0] ?? null) : (r.data ?? null);
   return { ok: true, org: row };

@@ -612,51 +612,60 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
       try {
         let supabaseOrg: RemoteOrg | null = null;
 
+        // Step 1: REST lookup via public_lookup_org_by_code
         const restRes = await restLookupOrgByCode(normalizedCode);
         if (restRes.ok) {
           supabaseOrg = restRes.org;
           if (supabaseOrg) console.log('[joinOrg] found via REST:', supabaseOrg.name);
         } else {
-          lastSupabaseError = restRes.error;
+          lastSupabaseError = `[Step 1 – REST lookup] ${restRes.error}`;
           console.log('[joinOrg] REST lookup error:', restRes.error);
         }
 
+        // Step 2: RPC lookup via public_lookup_org_by_code
         if (!supabaseOrg) {
+          lastSupabaseError = null;
           const rpc = await supabase.rpc('public_lookup_org_by_code', { p_code: normalizedCode });
           if (rpc.error) {
-            lastSupabaseError = `${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim();
+            lastSupabaseError = `[Step 2 – RPC lookup] ${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim();
           } else if (rpc.data && Array.isArray(rpc.data) && rpc.data.length > 0) {
             supabaseOrg = rpc.data[0] as RemoteOrg;
           }
         }
 
+        // Step 3: Exact code match on organizations table
         if (!supabaseOrg) {
+          lastSupabaseError = null;
           const exact = await supabase
             .from('organizations')
             .select('*')
             .eq('code', normalizedCode)
             .maybeSingle();
           if (exact.error) {
-            lastSupabaseError = `${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim();
+            lastSupabaseError = `[Step 3 – Exact match] ${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim();
           } else {
             supabaseOrg = (exact.data as RemoteOrg | null) ?? null;
           }
         }
 
+        // Step 4: Case-insensitive match on organizations table
         if (!supabaseOrg) {
+          lastSupabaseError = null;
           const ci = await supabase
             .from('organizations')
             .select('*')
             .ilike('code', normalizedCode)
             .maybeSingle();
           if (ci.error) {
-            lastSupabaseError = `${ci.error.code ?? ''} ${ci.error.message ?? ''}`.trim();
+            lastSupabaseError = `[Step 4 – Case-insensitive match] ${ci.error.code ?? ''} ${ci.error.message ?? ''}`.trim();
           } else {
             supabaseOrg = (ci.data as RemoteOrg | null) ?? null;
           }
         }
 
+        // Step 5: Join org via public_join_org
         if (!supabaseOrg) {
+          lastSupabaseError = null;
           const joinRes = await restJoinOrg({
             code: normalizedCode,
             userId: generateUUID(),
@@ -666,7 +675,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
           if (joinRes.ok && joinRes.org) {
             supabaseOrg = joinRes.org;
           } else if (!joinRes.ok) {
-            lastSupabaseError = joinRes.error;
+            lastSupabaseError = `[Step 5 – Join org] ${joinRes.error}`;
           }
         }
 
