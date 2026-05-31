@@ -115,11 +115,16 @@ async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: 
       body: bodyStr,
     }, timeoutMs);
     const text = await res.text();
+    console.log('[rpcPost] <<< RESPONSE <<<');
+    console.log('[rpcPost] Status:', res.status, res.statusText);
+    console.log('[rpcPost] Body (first 500 chars):', text.slice(0, 500));
+    console.log('[rpcPost] Body type:', typeof text, '| Looks like array:', text.trim().startsWith('['), '| Looks like object:', text.trim().startsWith('{'));
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
     }
     try {
       const data = text ? (JSON.parse(text) as T) : (undefined as unknown as T);
+      console.log('[rpcPost] Parsed data type:', Array.isArray(data) ? `array[${(data as unknown[]).length}]` : typeof data);
       return { ok: true, data };
     } catch {
       return { ok: false, error: `Invalid JSON: ${text.slice(0, 300)}` };
@@ -214,8 +219,10 @@ export async function restJoinOrg(params: {
   };
   console.log('[restJoinOrg] POST body to public_join_org:', JSON.stringify(body));
   const r = await rpcPost<RemoteOrg[] | RemoteOrg | null>('public_join_org', body);
+  console.log('[restJoinOrg] rpcPost result — ok:', r.ok, '| data:', r.ok ? JSON.stringify(r.data).slice(0, 500) : 'N/A');
   if (!r.ok) return r;
   const row = Array.isArray(r.data) ? (r.data[0] ?? null) : (r.data ?? null);
+  console.log('[restJoinOrg] extracted row:', row ? `id=${(row as RemoteOrg).id} name=${(row as RemoteOrg).name}` : 'NULL');
   return { ok: true, org: row };
 }
 

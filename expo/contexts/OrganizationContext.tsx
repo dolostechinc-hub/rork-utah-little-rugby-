@@ -672,10 +672,18 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             name: userName || 'Volunteer',
             email: email || '',
           });
+          console.log('[joinOrg] Step 5 result — ok:', joinRes.ok, '| org:', joinRes.ok ? (joinRes.org ? `id=${joinRes.org.id}` : 'NULL') : 'N/A');
           if (joinRes.ok && joinRes.org) {
             supabaseOrg = joinRes.org;
+            console.log('[joinOrg] Step 5 SUCCESS: joined org', joinRes.org.name);
           } else if (!joinRes.ok) {
             lastSupabaseError = `[Step 5 – Join org] ${joinRes.error}`;
+          } else {
+            // joinRes.ok is true but org is null — server returned 200 with no org row.
+            // This means the org either doesn't exist or the user is already a member
+            // (ON CONFLICT DO NOTHING on a race with a concurrent insert).
+            lastSupabaseError = '[Step 5 – Join org] Server returned 200 but no org row — org may not exist or user may already be a member';
+            console.log('[joinOrg] Step 5 returned ok but org is null — org code may be invalid or user already member');
           }
         }
 
