@@ -219,10 +219,11 @@ export async function restJoinOrg(params: {
   };
   console.log('[restJoinOrg] POST body to public_join_org:', JSON.stringify(body));
   const r = await rpcPost<RemoteOrg[] | RemoteOrg | null>('public_join_org', body);
-  console.log('[restJoinOrg] rpcPost result — ok:', r.ok, '| data:', r.ok ? JSON.stringify(r.data).slice(0, 500) : 'N/A');
+  console.log('[restJoinOrg] rpcPost result — ok:', r.ok, '| data type:', r.ok ? (Array.isArray(r.data) ? `array[${(r.data as unknown[]).length}]` : typeof r.data) : 'N/A');
+  console.log('[restJoinOrg] rpcPost raw data:', r.ok ? JSON.stringify(r.data).slice(0, 800) : 'N/A');
   if (!r.ok) return r;
   const row = Array.isArray(r.data) ? (r.data[0] ?? null) : (r.data ?? null);
-  console.log('[restJoinOrg] extracted row:', row ? `id=${(row as RemoteOrg).id} name=${(row as RemoteOrg).name}` : 'NULL');
+  console.log('[restJoinOrg] isArray:', Array.isArray(r.data), '| arrayLen:', Array.isArray(r.data) ? (r.data as unknown[]).length : 'N/A', '| row:', row ? `id=${(row as RemoteOrg).id} name=${(row as RemoteOrg).name}` : 'NULL');
   return { ok: true, org: row };
 }
 

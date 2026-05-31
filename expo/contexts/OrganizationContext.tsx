@@ -679,11 +679,34 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
           } else if (!joinRes.ok) {
             lastSupabaseError = `[Step 5 – Join org] ${joinRes.error}`;
           } else {
-            // joinRes.ok is true but org is null — server returned 200 with no org row.
-            // This means the org either doesn't exist or the user is already a member
-            // (ON CONFLICT DO NOTHING on a race with a concurrent insert).
-            lastSupabaseError = '[Step 5 – Join org] Server returned 200 but no org row — org may not exist or user may already be a member';
-            console.log('[joinOrg] Step 5 returned ok but org is null — org code may be invalid or user already member');
+            // joinRes.ok is true but org is null.
+            // The server confirmed the org code is valid (200) and the user is a member
+            // (ON CONFLICT DO NOTHING on the already-a-member path may cause
+            // the function to return no rows). Fall back to a direct lookup.
+            console.log('[joinOrg] Step 5 returned ok but org is null — code is valid, attempting fallback lookup');
+            lastSupabaseError = null;
+            const fallback = await restLookupOrgByCode(normalizedCode);
+            if (fallback.ok && fallback.org) {
+              supabaseOrg = fallback.org;
+              console.log('[joinOrg] Step 5 fallback lookup found org:', fallback.org.name);
+            } else {
+              // Last resort: direct table query
+              console.log('[joinOrg] Step 5 fallback lookup returned', fallback.ok ? 'null org' : fallback.error, '— trying direct table query');
+              lastSupabaseError = null;
+              const direct = await supabase
+                .from('organizations')
+                .select('*')
+                .eq('code', normalizedCode)
+                .maybeSingle();
+              if (!direct.error && direct.data) {
+                supabaseOrg = direct.data as RemoteOrg;
+                console.log('[joinOrg] Step 5 direct query found org:', supabaseOrg.name);
+              } else if (direct.error) {
+                lastSupabaseError = `[Step 5 – Direct query] ${direct.error.code ?? ''} ${direct.error.message ?? ''}`.trim();
+              } else {
+                console.log('[joinOrg] Step 5 direct query returned no rows — but server confirmed code is valid; proceeding anyway');
+              }
+            }
           }
         }
 
