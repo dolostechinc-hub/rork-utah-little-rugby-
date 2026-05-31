@@ -95,16 +95,24 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
 
 async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: number = 8000): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   const { url, key } = getSupabaseRestConfig();
+  const fullUrl = `${url}/rest/v1/rpc/${fn}`;
+  const bodyStr = JSON.stringify(body);
+  const headers = {
+    'apikey': key,
+    'Authorization': `Bearer ${key}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
+  console.log('[rpcPost] >>> REQUEST >>>');
+  console.log('[rpcPost] URL:', fullUrl);
+  console.log('[rpcPost] Headers:', JSON.stringify({ ...headers, apikey: key ? `${key.slice(0, 8)}...` : 'undefined', Authorization: key ? `Bearer ${key.slice(0, 8)}...` : 'undefined' }));
+  console.log('[rpcPost] Body:', bodyStr);
+  console.log('[rpcPost] Body type:', typeof bodyStr, '| Is stringified flat object:', bodyStr.startsWith('{') && bodyStr.endsWith('}'));
   try {
-    const res = await fetchWithTimeout(`${url}/rest/v1/rpc/${fn}`, {
+    const res = await fetchWithTimeout(fullUrl, {
       method: 'POST',
-      headers: {
-        'apikey': key,
-        'Authorization': `Bearer ${key}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify(body),
+      headers,
+      body: bodyStr,
     }, timeoutMs);
     const text = await res.text();
     if (!res.ok) {
