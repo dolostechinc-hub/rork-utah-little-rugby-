@@ -127,6 +127,57 @@ export const supabase = createClient(
   }
 );
 
+// ---------------------------------------------------------------------------
+// Startup session validation.
+//
+// A stale/expired Supabase auth session left over from a prior sign-in
+// (e.g. an admin who logged in on this device) causes two problems:
+//
+//   1. The supabase-js client attaches the expired Bearer token to EVERY
+//      request — including anonymous view-only reads — producing 401s
+//      and the spurious 404 /rest/v1/rpc/ (empty function name) that
+//      autoRefreshToken emits when it can't refresh.
+//
+//   2. The `onAuthStateChange` listener fires with a TOKEN_REFRESHED or
+//      SIGNED_OUT event while the anonymous join flow is in progress,
+//      corrupting `authUserId` mid-flight.
+//
+// We check the session once at import time. If the access token is expired
+// AND the refresh token is also expired (or missing), we sign out so the
+// client reverts to the anon key for all future requests.
+// ---------------------------------------------------------------------------
+void (async () => {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const session = data?.session;
+    if (!session) {
+      console.log('[supabase] no stored session — clean startup');
+      return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const accessExp = session.expires_at ?? 0;
+    const refreshExp = (session as { refresh_token_expires_at?: number }).refresh_token_expires_at ?? 0;
+    // If the access token is expired and the refresh token is also expired
+    // (or missing entirely), the session is dead. Sign out so the client
+    // doesn't try to auto-refresh and produce the empty-function-name RPC.
+    if (accessExp < now && (refreshExp === 0 || refreshExp < now)) {
+      console.log('[supabase] stored session is fully expired (access + refresh) — signing out to prevent stale JWT contamination');
+      await supabase.auth.signOut();
+    } else if (accessExp < now) {
+      // Access token expired but refresh may still be valid. Let
+      // autoRefreshToken do its thing. If it fails, the onAuthStateChange
+      // listener in AuthContext will pick up the SIGNED_OUT event.
+      console.log('[supabase] stored session access token expired but refresh may still be valid — letting autoRefreshToken handle it');
+    } else {
+      console.log('[supabase] stored session is still valid');
+    }
+  } catch (err) {
+    console.warn('[supabase] session validation failed:', err);
+    // If we can't even read the session, clear it to be safe.
+    try { await supabase.auth.signOut(); } catch { /* ignore */ }
+  }
+})();
+
 interface PhotoBodyResult {
   body: ArrayBuffer | Blob;
   size: number;

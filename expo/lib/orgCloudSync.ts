@@ -192,7 +192,7 @@ export async function restUpsertMember(m: UpsertMemberInput): Promise<{ ok: true
       safeId, safeOrgId, safeUserId,
     });
   }
-  const r = await rpcPost<unknown>('public_upsert_org_member', {
+  const body = {
     p_id: safeId,
     p_org_id: safeOrgId,
     p_user_id: safeUserId,
@@ -200,7 +200,10 @@ export async function restUpsertMember(m: UpsertMemberInput): Promise<{ ok: true
     p_email: m.email ?? '',
     p_name: m.name ?? '',
     p_joined_at: m.joinedAt,
-  });
+  };
+  console.log('[restUpsertMember] POST body to public_upsert_org_member:', JSON.stringify(body));
+  console.log('[restUpsertMember] p_user_id is valid UUID:', UUID_RE.test(safeUserId), '| value:', safeUserId);
+  const r = await rpcPost<unknown>('public_upsert_org_member', body);
   if (!r.ok) return r;
   return { ok: true };
 }

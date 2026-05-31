@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useCallback, useEffect, } from 'react';
 import { supabase } from '@/lib/supabase';
+import { randomId } from '@/lib/ids';
 import {
   restLookupOrgByCode,
   restUpsertOrg,
@@ -38,14 +39,7 @@ function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
-function generateUUID(): string {
-  // Generate a proper UUID v4 format for Supabase compatibility
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
+
 
 function generateOrgCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -349,8 +343,8 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     console.log('Creating organization:', name);
     const orgCode = generateOrgCode();
     // Use UUID format for Supabase compatibility
-    const orgId = generateUUID();
-    const ownerUUID = generateUUID();
+    const orgId = randomId();
+    const ownerUUID = randomId();
     
     console.log('Generated org ID (UUID):', orgId);
     console.log('Generated org code:', orgCode);
@@ -360,7 +354,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     
     let savedToSupabase = false;
     let supabaseErrorMsg: string | null = null;
-    const ownerMemberId = generateUUID();
+    const ownerMemberId = randomId();
     try {
       const upload = await restUpsertOrgWithRetry({
         id: orgId,
@@ -609,6 +603,22 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     let lastSupabaseError: string | null = null;
     if (!org) {
       console.log('Organization not found locally, checking Supabase via REST...');
+
+      // Before the anonymous join flow, sign out any stale Supabase auth
+      // session. A leftover admin JWT on this device would contaminate
+      // supabase-js client requests (Steps 2-4 below) with an expired
+      // Bearer token, causing 401s and the empty-function-name RPC 404.
+      // The view-only join path must use the anon key exclusively.
+      try {
+        const { data: sessData } = await supabase.auth.getSession();
+        if (sessData?.session) {
+          console.log('[joinOrg] clearing stale auth session before anonymous join');
+          await supabase.auth.signOut();
+        }
+      } catch {
+        // ignore — best-effort cleanup
+      }
+
       try {
         let supabaseOrg: RemoteOrg | null = null;
 
@@ -668,7 +678,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
           lastSupabaseError = null;
           const joinRes = await restJoinOrg({
             code: normalizedCode,
-            userId: generateUUID(),
+            userId: randomId(),
             name: userName || 'Volunteer',
             email: email || '',
           });
@@ -768,7 +778,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     }
 
     const member: OrgMember = {
-      id: generateUUID(),
+      id: randomId(),
       orgId: org.id,
       userId,
       role: 'volunteer',
@@ -781,7 +791,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
     // Note: `userId` from the client (e.g. "user-1712345") is not a UUID, so we
     // generate a stable UUID for the cloud row instead of failing on the UUID cast.
     try {
-      const memberUUID = generateUUID();
+      const memberUUID = randomId();
       const memberRpc = await supabase.rpc('public_upsert_org_member', {
         p_id: member.id,
         p_org_id: org.id,
