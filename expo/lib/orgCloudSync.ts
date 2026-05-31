@@ -66,12 +66,37 @@ export interface RemoteOrg {
   is_active?: boolean | null;
 }
 
+// Polyfill-safe AbortController for React Native Hermes (iOS production).
+// Hermes added AbortController in v0.12, but some production bundles still
+// ship without it. We fall back to Promise.race with a timeout token so the
+// network request always has an upper bound, even without AbortController.
+const hasAbortController =
+  typeof AbortController !== 'undefined' && typeof AbortSignal !== 'undefined';
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  if (hasAbortController) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { ...options, signal: controller.signal });
+      return res;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // Fallback: race fetch against a timeout promise
+  const timeout = new Promise<never>((_resolve, reject) =>
+    setTimeout(() => reject(new Error('Request timed out')), timeoutMs),
+  );
+  const res = await Promise.race([fetch(url, options), timeout]);
+  return res as Response;
+}
+
 async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: number = 8000): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   const { url, key } = getSupabaseRestConfig();
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${url}/rest/v1/rpc/${fn}`, {
+    const res = await fetchWithTimeout(`${url}/rest/v1/rpc/${fn}`, {
       method: 'POST',
       headers: {
         'apikey': key,
@@ -80,9 +105,7 @@ async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: 
         'Accept': 'application/json',
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(t);
+    }, timeoutMs);
     const text = await res.text();
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
@@ -94,7 +117,6 @@ async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: 
       return { ok: false, error: `Invalid JSON: ${text.slice(0, 300)}` };
     }
   } catch (err) {
-    clearTimeout(t);
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg };
   }

@@ -690,17 +690,23 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
           console.log('No organization found in Supabase with code:', normalizedCode);
         }
       } catch (err) {
-        console.log('Supabase request failed:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log('[joinOrg] Supabase request threw:', msg);
+        lastSupabaseError = lastSupabaseError
+          ? `${lastSupabaseError}; ${msg}`
+          : msg;
       }
     }
     
     if (!org) {
       console.log('Organization not found with code:', code);
       const { Alert } = require('react-native') as typeof import('react-native');
-      const detail = lastSupabaseError ? `\n\nSupabase: ${lastSupabaseError}` : '';
+      const detail = lastSupabaseError
+        ? `\n\nError: ${lastSupabaseError}\n\nCheck your internet connection and try again.`
+        : '\n\nCheck your internet connection and try again.';
       Alert.alert(
         'Organization not found',
-        `No organization was found with the code "${normalizedCode}".\n\nAsk the admin to:\n1. Run migration "013_join_org_rpc.sql" in Supabase SQL editor (one-time).\n2. Open the app → Settings → My Organizations → "Sync All to Cloud".\n\nThen try again.${detail}`
+        `No organization was found with the code "${normalizedCode}".\n\nIf you are the admin, open the app on the device that created this org and go to:\nSettings → My Organizations → "Sync All to Cloud".${detail}`
       );
       return null;
     }
