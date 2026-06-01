@@ -624,70 +624,100 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
 
         // Step 1: REST lookup via public_lookup_org_by_code
         const restRes = await restLookupOrgByCode(normalizedCode);
+        console.log('[joinOrg] Step 1 result — ok:', restRes.ok, '| org:', restRes.ok ? (restRes.org ? `id=${restRes.org.id}` : 'NULL') : 'N/A', '| error:', restRes.ok ? 'N/A' : restRes.error);
         if (restRes.ok) {
           supabaseOrg = restRes.org;
-          if (supabaseOrg) console.log('[joinOrg] found via REST:', supabaseOrg.name);
+          if (supabaseOrg) console.log('[joinOrg] Step 1 SUCCESS: found via REST:', supabaseOrg.name);
+          else console.log('[joinOrg] Step 1: REST returned ok but org is null');
         } else {
-          lastSupabaseError = `[Step 1 – REST lookup] ${restRes.error}`;
-          console.log('[joinOrg] REST lookup error:', restRes.error);
+          // Timeout or network error — retry once before falling through
+          console.log('[joinOrg] Step 1 FAILED:', restRes.error, '— retrying once with 20s timeout...');
+          const retryRes = await restLookupOrgByCode(normalizedCode);
+          console.log('[joinOrg] Step 1 RETRY result — ok:', retryRes.ok, '| org:', retryRes.ok ? (retryRes.org ? `id=${retryRes.org.id}` : 'NULL') : 'N/A', '| error:', retryRes.ok ? 'N/A' : retryRes.error);
+          if (retryRes.ok) {
+            supabaseOrg = retryRes.org;
+            if (supabaseOrg) console.log('[joinOrg] Step 1 RETRY SUCCESS: found via REST:', supabaseOrg.name);
+            else console.log('[joinOrg] Step 1 RETRY: returned ok but org is null');
+          } else {
+            lastSupabaseError = `[Step 1 – REST lookup] first: ${restRes.error}; retry: ${retryRes.error}`;
+            console.log('[joinOrg] Step 1 RETRY also FAILED:', retryRes.error);
+          }
         }
+        console.log('[joinOrg] After Step 1 — supabaseOrg:', supabaseOrg ? `${supabaseOrg.name} (${supabaseOrg.id})` : 'NULL', '| lastError:', lastSupabaseError ?? 'none');
 
         // Step 2: RPC lookup via public_lookup_org_by_code
         if (!supabaseOrg) {
           lastSupabaseError = null;
+          console.log('[joinOrg] Step 2: trying supabase.rpc public_lookup_org_by_code...');
           const rpc = await supabase.rpc('public_lookup_org_by_code', { p_code: normalizedCode });
+          const rpcDataArr = rpc.data && Array.isArray(rpc.data) ? rpc.data : null;
+          console.log('[joinOrg] Step 2 result — error:', rpc.error ? `${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim() : 'none', '| dataLen:', rpcDataArr ? rpcDataArr.length : (rpc.data ? 'non-array' : 'null'));
           if (rpc.error) {
             lastSupabaseError = `[Step 2 – RPC lookup] ${rpc.error.code ?? ''} ${rpc.error.message ?? ''}`.trim();
-          } else if (rpc.data && Array.isArray(rpc.data) && rpc.data.length > 0) {
-            supabaseOrg = rpc.data[0] as RemoteOrg;
+          } else if (rpcDataArr && rpcDataArr.length > 0) {
+            supabaseOrg = rpcDataArr[0] as RemoteOrg;
+            console.log('[joinOrg] Step 2 SUCCESS: found via supabase.rpc:', supabaseOrg.name);
+          } else {
+            console.log('[joinOrg] Step 2: no org found via supabase.rpc (data:', rpcDataArr ? `empty array` : rpc.data ? `type=${typeof rpc.data}` : 'null', ')');
           }
         }
+        console.log('[joinOrg] After Step 2 — supabaseOrg:', supabaseOrg ? `${supabaseOrg.name} (${supabaseOrg.id})` : 'NULL', '| lastError:', lastSupabaseError ?? 'none');
 
         // Step 3: Exact code match on organizations table
         if (!supabaseOrg) {
           lastSupabaseError = null;
+          console.log('[joinOrg] Step 3: trying exact code match on organizations table...');
           const exact = await supabase
             .from('organizations')
             .select('*')
             .eq('code', normalizedCode)
             .maybeSingle();
+          console.log('[joinOrg] Step 3 result — error:', exact.error ? `${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim() : 'none', '| data:', exact.data ? `id=${(exact.data as RemoteOrg).id}` : 'NULL');
           if (exact.error) {
             lastSupabaseError = `[Step 3 – Exact match] ${exact.error.code ?? ''} ${exact.error.message ?? ''}`.trim();
           } else {
             supabaseOrg = (exact.data as RemoteOrg | null) ?? null;
+            if (supabaseOrg) console.log('[joinOrg] Step 3 SUCCESS: found via exact match:', supabaseOrg.name);
           }
         }
+        console.log('[joinOrg] After Step 3 — supabaseOrg:', supabaseOrg ? `${supabaseOrg.name} (${supabaseOrg.id})` : 'NULL', '| lastError:', lastSupabaseError ?? 'none');
 
         // Step 4: Case-insensitive match on organizations table
         if (!supabaseOrg) {
           lastSupabaseError = null;
+          console.log('[joinOrg] Step 4: trying ilike code match on organizations table...');
           const ci = await supabase
             .from('organizations')
             .select('*')
             .ilike('code', normalizedCode)
             .maybeSingle();
+          console.log('[joinOrg] Step 4 result — error:', ci.error ? `${ci.error.code ?? ''} ${ci.error.message ?? ''}`.trim() : 'none', '| data:', ci.data ? `id=${(ci.data as RemoteOrg).id}` : 'NULL');
           if (ci.error) {
             lastSupabaseError = `[Step 4 – Case-insensitive match] ${ci.error.code ?? ''} ${ci.error.message ?? ''}`.trim();
           } else {
             supabaseOrg = (ci.data as RemoteOrg | null) ?? null;
+            if (supabaseOrg) console.log('[joinOrg] Step 4 SUCCESS: found via ilike:', supabaseOrg.name);
           }
         }
+        console.log('[joinOrg] After Step 4 — supabaseOrg:', supabaseOrg ? `${supabaseOrg.name} (${supabaseOrg.id})` : 'NULL', '| lastError:', lastSupabaseError ?? 'none');
 
         // Step 5: Join org via public_join_org
         if (!supabaseOrg) {
           lastSupabaseError = null;
+          console.log('[joinOrg] Step 5: calling restJoinOrg with code:', normalizedCode);
           const joinRes = await restJoinOrg({
             code: normalizedCode,
             userId: randomId(),
             name: userName || 'Volunteer',
             email: email || '',
           });
-          console.log('[joinOrg] Step 5 result — ok:', joinRes.ok, '| org:', joinRes.ok ? (joinRes.org ? `id=${joinRes.org.id}` : 'NULL') : 'N/A');
+          console.log('[joinOrg] Step 5 result — ok:', joinRes.ok, '| org:', joinRes.ok ? (joinRes.org ? `id=${joinRes.org.id} name=${joinRes.org.name}` : 'NULL') : 'N/A', '| error:', joinRes.ok ? 'N/A' : joinRes.error);
           if (joinRes.ok && joinRes.org) {
             supabaseOrg = joinRes.org;
             console.log('[joinOrg] Step 5 SUCCESS: joined org', joinRes.org.name);
           } else if (!joinRes.ok) {
             lastSupabaseError = `[Step 5 – Join org] ${joinRes.error}`;
+            console.log('[joinOrg] Step 5 FAILED:', joinRes.error);
           } else {
             // joinRes.ok is true but org is null.
             // The server confirmed the org code is valid (200) and the user is a member
@@ -696,6 +726,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             console.log('[joinOrg] Step 5 returned ok but org is null — code is valid, attempting fallback lookup');
             lastSupabaseError = null;
             const fallback = await restLookupOrgByCode(normalizedCode);
+            console.log('[joinOrg] Step 5 fallback result — ok:', fallback.ok, '| org:', fallback.ok ? (fallback.org ? `id=${fallback.org.id}` : 'NULL') : 'N/A', '| error:', fallback.ok ? 'N/A' : fallback.error);
             if (fallback.ok && fallback.org) {
               supabaseOrg = fallback.org;
               console.log('[joinOrg] Step 5 fallback lookup found org:', fallback.org.name);
@@ -708,6 +739,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
                 .select('*')
                 .eq('code', normalizedCode)
                 .maybeSingle();
+              console.log('[joinOrg] Step 5 direct query result — error:', direct.error ? `${direct.error.code ?? ''} ${direct.error.message ?? ''}`.trim() : 'none', '| data:', direct.data ? `id=${(direct.data as RemoteOrg).id}` : 'NULL');
               if (!direct.error && direct.data) {
                 supabaseOrg = direct.data as RemoteOrg;
                 console.log('[joinOrg] Step 5 direct query found org:', supabaseOrg.name);
@@ -719,6 +751,7 @@ export const [OrganizationProvider, useOrganization] = createContextHook(() => {
             }
           }
         }
+        console.log('[joinOrg] After Step 5 — supabaseOrg:', supabaseOrg ? `${supabaseOrg.name} (${supabaseOrg.id})` : 'NULL', '| lastError:', lastSupabaseError ?? 'none');
 
         if (supabaseOrg) {
           console.log('Found organization in Supabase:', supabaseOrg.name, 'ID:', supabaseOrg.id);

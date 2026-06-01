@@ -93,7 +93,7 @@ async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: nu
   return res as Response;
 }
 
-async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: number = 8000): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: number = 20000): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   const { url, key } = getSupabaseRestConfig();
   const fullUrl = `${url}/rest/v1/rpc/${fn}`;
   const bodyStr = JSON.stringify(body);
