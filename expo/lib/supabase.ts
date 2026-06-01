@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-import Constants from 'expo-constants';
+
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { decode as decodeBase64 } from 'base64-arraybuffer';
@@ -85,34 +85,13 @@ export async function compressPhotoForUpload(photoUri: string): Promise<string> 
   }
 }
 
-const FALLBACK_SUPABASE_URL = 'https://pfhkypuavngiidyrrnpn.supabase.co';
-const FALLBACK_SUPABASE_ANON_KEY = 'sb_publishable_o6d-VXD_hzD1AYntd2_guw_dj-8ZyYX';
+const HARDCODED_SUPABASE_URL = 'https://pfhkypuavngiidyrrnpn.supabase.co';
+const HARDCODED_SUPABASE_ANON_KEY = 'sb_publishable_o6d-VXD_hzD1AYntd2_guw_dj-8ZyYX';
 
-const supabaseUrl =
-  process.env.EXPO_PUBLIC_SUPABASE_URL ??
-  (Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ??
-  FALLBACK_SUPABASE_URL;
+const supabaseUrl = HARDCODED_SUPABASE_URL;
+const supabaseAnonKey = HARDCODED_SUPABASE_ANON_KEY;
 
-const supabaseAnonKey =
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
-  (Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined) ??
-  FALLBACK_SUPABASE_ANON_KEY;
-
-console.log('[supabase] init', {
-  hasUrl: !!supabaseUrl,
-  hasKey: !!supabaseAnonKey,
-  urlSource: process.env.EXPO_PUBLIC_SUPABASE_URL
-    ? 'process.env'
-    : Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL
-    ? 'expo-constants'
-    : 'fallback',
-});
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn(
-    'Missing Supabase env vars. Supabase features will be unavailable. Ensure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY are set.'
-  );
-}
+console.log('[supabase] init — hardcoded', { url: supabaseUrl, hasKey: !!supabaseAnonKey });
 
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co',

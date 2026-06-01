@@ -78,8 +78,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     eas: {
       projectId: 'f7899347-aa05-47e8-91ef-49efdf33a996',
     },
-    EXPO_PUBLIC_SUPABASE_URL: process.env.EXPO_PUBLIC_SUPABASE_URL,
-    EXPO_PUBLIC_SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY,
+    EXPO_PUBLIC_SUPABASE_URL: 'https://pfhkypuavngiidyrrnpn.supabase.co',
+    EXPO_PUBLIC_SUPABASE_ANON_KEY: 'sb_publishable_o6d-VXD_hzD1AYntd2_guw_dj-8ZyYX',
     EXPO_PUBLIC_RORK_API_BASE_URL: process.env.EXPO_PUBLIC_RORK_API_BASE_URL,
     EXPO_PUBLIC_RORK_AUTH_URL: process.env.EXPO_PUBLIC_RORK_AUTH_URL,
     EXPO_PUBLIC_TOOLKIT_URL: process.env.EXPO_PUBLIC_TOOLKIT_URL,

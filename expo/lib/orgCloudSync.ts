@@ -1,7 +1,5 @@
-import Constants from 'expo-constants';
-
-const FALLBACK_SUPABASE_URL = 'https://pfhkypuavngiidyrrnpn.supabase.co';
-const FALLBACK_SUPABASE_ANON_KEY = 'sb_publishable_o6d-VXD_hzD1AYntd2_guw_dj-8ZyYX';
+const HARDCODED_SUPABASE_URL = 'https://pfhkypuavngiidyrrnpn.supabase.co';
+const HARDCODED_SUPABASE_ANON_KEY = 'sb_publishable_o6d-VXD_hzD1AYntd2_guw_dj-8ZyYX';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -40,15 +38,10 @@ export function coerceToUUID(input: string | null | undefined, salt: string = ''
 }
 
 export function getSupabaseRestConfig(): { url: string; key: string } {
-  const url =
-    process.env.EXPO_PUBLIC_SUPABASE_URL ??
-    (Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL as string | undefined) ??
-    FALLBACK_SUPABASE_URL;
-  const key =
-    process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ??
-    (Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined) ??
-    FALLBACK_SUPABASE_ANON_KEY;
-  return { url, key };
+  return {
+    url: HARDCODED_SUPABASE_URL,
+    key: HARDCODED_SUPABASE_ANON_KEY,
+  };
 }
 
 export interface RemoteOrg {
@@ -120,18 +113,18 @@ async function rpcPost<T>(fn: string, body: Record<string, unknown>, timeoutMs: 
     console.log('[rpcPost] Body (first 500 chars):', text.slice(0, 500));
     console.log('[rpcPost] Body type:', typeof text, '| Looks like array:', text.trim().startsWith('['), '| Looks like object:', text.trim().startsWith('{'));
     if (!res.ok) {
-      return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+      return { ok: false, error: `[${url}] HTTP ${res.status}: ${text.slice(0, 300)}` };
     }
     try {
       const data = text ? (JSON.parse(text) as T) : (undefined as unknown as T);
       console.log('[rpcPost] Parsed data type:', Array.isArray(data) ? `array[${(data as unknown[]).length}]` : typeof data);
       return { ok: true, data };
     } catch {
-      return { ok: false, error: `Invalid JSON: ${text.slice(0, 300)}` };
+      return { ok: false, error: `[${url}] Invalid JSON: ${text.slice(0, 300)}` };
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: msg };
+    return { ok: false, error: `[${url}] ${msg}` };
   }
 }
 
