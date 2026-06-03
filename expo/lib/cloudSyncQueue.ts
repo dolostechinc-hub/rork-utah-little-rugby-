@@ -123,6 +123,18 @@ interface RemoteSnapshot {
   clientUpdatedAt: string | null;
 }
 
+// Timeout wrapper for supabase queries so stalled network calls don't hang
+// the app indefinitely. Using Promise.race with a timeout promise is
+// compatible with React Native Hermes (no AbortController requirement).
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  const timeout = new Promise<never>((_resolve, reject) =>
+    setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms),
+  );
+  return Promise.race([promise, timeout]);
+}
+
+const QUERY_TIMEOUT_MS = 15000; // 15s per chunk / upsert
+
 async function fetchRemoteSnapshots(
   orgId: string,
   playerIds: string[],
@@ -135,21 +147,28 @@ async function fetchRemoteSnapshots(
     // We need the full row so we can do a per-field merge when remote is
     // newer. Pulling the whole row in 200-id chunks keeps the request
     // small enough to stay within Supabase's row-limit defaults.
-    const { data, error } = await supabase
-      .from('roster_players')
-      .select('*')
-      .eq('org_id', orgId)
-      .in('id', slice);
-    if (error) {
-      console.warn('[cloudSyncQueue] fetchRemoteSnapshots chunk failed:', error.message);
-      continue;
-    }
-    for (const row of (data ?? []) as RosterPlayerRow[]) {
-      if (!row?.id) continue;
-      out.set(row.id, {
-        player: rowToPlayer(row),
-        clientUpdatedAt: row.client_updated_at ?? row.updated_at ?? null,
-      });
+    try {
+      const q = supabase
+        .from('roster_players')
+        .select('*')
+        .eq('org_id', orgId)
+        .in('id', slice);
+      const { data, error } = await withTimeout(q, QUERY_TIMEOUT_MS, `fetchRemoteSnapshots chunk ${i}`);
+      if (error) {
+        console.warn('[cloudSyncQueue] fetchRemoteSnapshots chunk failed:', error.message);
+        continue;
+      }
+      for (const row of (data ?? []) as RosterPlayerRow[]) {
+        if (!row?.id) continue;
+        out.set(row.id, {
+          player: rowToPlayer(row),
+          clientUpdatedAt: row.client_updated_at ?? row.updated_at ?? null,
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[cloudSyncQueue] fetchRemoteSnapshots chunk errored:', message);
+      throw err; // propagate timeout so flushCloudSyncQueue can handle it
     }
   }
   return out;
@@ -231,9 +250,10 @@ export async function flushCloudSyncQueue(
     const row = playerToRow(orgId, toPush, updatedBy, writeStamp);
 
     try {
-      const { error } = await supabase
+      const q = supabase
         .from('roster_players')
         .upsert(row, { onConflict: 'org_id,id' });
+      const { error } = await withTimeout(q, QUERY_TIMEOUT_MS, `upsert player ${item.playerId}`);
       if (error) {
         console.warn(
           '[cloudSyncQueue] upsert failed for',

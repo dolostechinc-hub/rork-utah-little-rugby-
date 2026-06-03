@@ -127,6 +127,16 @@ export function playerToRow(
 // stable key so realtime races can't shift rows between pages.
 const ROSTER_PAGE_SIZE = 1000;
 
+// Timeout wrapper so stalled Supabase calls don't hang the app indefinitely.
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  const timeout = new Promise<never>((_resolve, reject) =>
+    setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms),
+  );
+  return Promise.race([promise, timeout]);
+}
+
+const QUERY_TIMEOUT_MS = 20000; // 20s per page fetch
+
 export async function fetchRoster(orgId: string): Promise<Player[]> {
   if (!orgId) return [];
   console.log('[rosterSync] fetching roster for org', orgId);
@@ -136,7 +146,7 @@ export async function fetchRoster(orgId: string): Promise<Player[]> {
 
   while (true) {
     const to = from + ROSTER_PAGE_SIZE - 1;
-    const { data, error } = await supabase
+    const q = supabase
       .from('roster_players')
       .select('*')
       .eq('org_id', orgId)
@@ -145,6 +155,7 @@ export async function fetchRoster(orgId: string): Promise<Player[]> {
       // the migration 024 composite PK, so it's a safe order key.
       .order('id', { ascending: true })
       .range(from, to);
+    const { data, error } = await withTimeout(q, QUERY_TIMEOUT_MS, `fetchRoster page ${from}-${to}`);
 
     if (error) {
       console.warn('[rosterSync] fetchRoster failed:', error.message, { from, to });
