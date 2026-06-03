@@ -5,6 +5,7 @@ import { CheckCircle2, Circle, Camera, User, Shirt, ArrowUp } from 'lucide-react
 import Colors from '@/constants/colors';
 import { Player, RestrictionStatus } from '@/types';
 import { getRestrictionStatusLabel, getRestrictionStatusColor, isActuallyPlayingUp } from '@/utils/playerUtils';
+import { formatTeamAssignments } from '@/utils/teamAssignments';
 
 interface PlayerCardProps {
   player: Player;
@@ -63,6 +64,12 @@ function PlayerCard({ player }: PlayerCardProps) {
           <Text style={styles.detailText}>{player.ageGroup}</Text>
           <View style={styles.dot} />
           <Text style={styles.detailText}>{player.division}</Text>
+          {player.teamName ? (
+            <>
+              <View style={styles.dot} />
+              <Text style={styles.detailText}>{formatTeamAssignments(player.teamName)}</Text>
+            </>
+          ) : null}
         </View>
         {player.weight ? (
           <Text style={styles.weight}>{player.weight} lbs</Text>

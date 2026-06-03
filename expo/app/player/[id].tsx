@@ -519,12 +519,17 @@ export default function PlayerDetailScreen() {
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>{player.division}</Text>
               </View>
-              {player.teamName && showTeamAssignment ? (
+              {player.teamName ? (
                 <View style={[styles.badge, styles.teamBadge]}>
                   <Users size={12} color={Colors.white} />
                   <Text style={[styles.badgeText, styles.teamBadgeText]}>{formatTeamAssignments(player.teamName)}</Text>
                 </View>
-              ) : null}
+              ) : (
+                <View style={[styles.badge, styles.teamBadgeEmpty]}>
+                  <Users size={12} color={Colors.textMuted} />
+                  <Text style={[styles.badgeText, styles.teamBadgeEmptyText]}>—</Text>
+                </View>
+              )}
             </View>
 
             {calculatedAgeGroup && calculatedAgeGroup !== player.ageGroup && !playUpAgeGroup && (
@@ -1264,6 +1269,15 @@ const styles = StyleSheet.create({
   },
   teamBadgeText: {
     color: Colors.white,
+  },
+  teamBadgeEmpty: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: Colors.surfaceAlt,
+  },
+  teamBadgeEmptyText: {
+    color: Colors.textMuted,
   },
   teamCard: {
     flexDirection: 'row',
