@@ -53,6 +53,9 @@ function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSecti
   const filteredCoaches = useMemo(() => {
     if (!hasActiveFilters) return [];
 
+    const safeCoachTeams = Array.isArray(coachTeams) ? coachTeams : [];
+    const safeCoaches = Array.isArray(coaches) ? coaches : [];
+
     const normalizeStr = (v: string | null | undefined) =>
       (v || '').toString().trim().toLowerCase();
 
@@ -70,7 +73,7 @@ function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSecti
 
     // Find which coach_teams rows match all active filters.
     const matchingCoachIds = new Set<string>();
-    for (const ct of coachTeams) {
+    for (const ct of safeCoachTeams) {
       if (targetClub && ctClubKey(ct.club) !== targetClub) continue;
       if (targetAge && normalizeAgeGroup(ct.ageGroup) !== targetAge) continue;
       if (targetDivision && normalizeStr(ct.division) !== targetDivision) continue;
@@ -82,7 +85,7 @@ function CoachSection({ coaches, coachTeams, filters, onCoachPress }: CoachSecti
     }
 
     // Return matching coaches sorted by name.
-    return coaches
+    return safeCoaches
       .filter((c) => matchingCoachIds.has(c.id))
       .sort((a, b) =>
         `${a.lastName} ${a.firstName}`.localeCompare(

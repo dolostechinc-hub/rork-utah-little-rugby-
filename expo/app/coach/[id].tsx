@@ -30,7 +30,7 @@ export default function CoachDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { isAdmin, canEdit } = useAuth();
-  const { coaches, coachTeams, updateCoach } = useRegistration() as unknown as {
+  const { coaches, coachTeams, updateCoach } = useRegistration() as {
     coaches: Coach[];
     coachTeams: { coachId: string; teamName: string; club: string; ageGroup: string; division: string }[];
     updateCoach: (coach: Coach) => Promise<void>;
