@@ -2,6 +2,7 @@ import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import { Player, RegistrationFilters, Club, AgeGroup, Division, ImportedSheet } from '@/types';
 import { mockPlayers, clubs as fallbackClubs, ageGroups as mockAgeGroups } from '@/mocks/registrationData';
@@ -775,6 +776,23 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       pendingChangesRef.current = new Map();
     };
   }, [currentOrg?.id, applyRosterChangeLocally, refreshRosterFromCloud]);
+
+  // ── AppState foreground refresh ─────────────────────────────────
+  // When the app returns from the background, re-fetch the roster from
+  // Supabase so stale AsyncStorage data is always replaced with the
+  // latest cloud data without requiring a force-close or reinstall.
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  useEffect(() => {
+    const handleChange = (nextState: AppStateStatus) => {
+      if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
+        console.log('[appState] app returned to foreground, refreshing roster from cloud');
+        void refreshRosterFromCloud();
+      }
+      appStateRef.current = nextState;
+    };
+    const subscription = AppState.addEventListener('change', handleChange);
+    return () => subscription.remove();
+  }, [refreshRosterFromCloud]);
 
   // ── Coach fetch + realtime subscription ──────────────────────────
   useEffect(() => {

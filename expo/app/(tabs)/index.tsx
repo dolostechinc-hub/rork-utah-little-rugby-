@@ -74,10 +74,12 @@ export default function CheckInScreen() {
     ageGroups,
     divisions,
     isLoading,
-    refreshData,
+    refreshRosterFromCloud,
     coaches,
     coachTeams,
+    refreshRosterFromCloud,
   } = useRegistration() as ReturnType<typeof useRegistration> & {
+    refreshRosterFromCloud: () => Promise<'ok' | 'no-org' | 'aborted' | 'error'>;
     coaches: Coach[];
     coachTeams: { coachId: string; teamName: string; club: string; ageGroup: string; division: string }[];
   };
@@ -183,9 +185,8 @@ export default function CheckInScreen() {
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     console.log('Pull-to-refresh triggered on Check-In screen');
-    refreshData();
-    setTimeout(() => setRefreshing(false), 1500);
-  }, [refreshData]);
+    void refreshRosterFromCloud().finally(() => setRefreshing(false));
+  }, [refreshRosterFromCloud]);
 
   const renderItem = useCallback(({ item }: { item: Player }) => (
     <PlayerCard player={item} />
