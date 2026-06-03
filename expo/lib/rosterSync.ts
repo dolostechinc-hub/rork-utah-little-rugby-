@@ -127,11 +127,34 @@ export function playerToRow(
 // stable key so realtime races can't shift rows between pages.
 const ROSTER_PAGE_SIZE = 1000;
 
-// Timeout wrapper so stalled Supabase calls don't hang the app indefinitely.
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  const timeout = new Promise<never>((_resolve, reject) =>
-    setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms),
-  );
+// Per-call timeout safety net.  The supabase client's global fetch already
+// has a 20 s AbortController timeout, but we keep this wrapper as a belt-
+// and-suspenders guard for two edge cases Hermes can hit:
+//
+//   1. supabase-js query builders are "thenables" (objects with a .then()
+//      method), not true Promises.  Promise.race() with a thenable is
+//      handled differently by Hermes than by JSC (the simulator engine) and
+//      can sometimes cause the race to never settle.
+//
+//   2. If the global fetch timeout fires but the supabase-js internals
+//      swallow the AbortError without propagating it, the caller would
+//      still hang.  This local setTimeout-based race ensures the caller
+//      always gets a resolution within the window.
+//
+// Fix: Promise.resolve() converts the thenable to a real Promise FIRST,
+// then we race that against a setTimeout.  Hermes handles this pattern
+// correctly because both sides of the race are now true Promises.
+function withTimeout<T>(
+  maybeThenable: Promise<T> | { then: (onfulfilled: (v: T) => any, onrejected: (e: any) => any) => any },
+  ms: number,
+  label: string,
+): Promise<T> {
+  const promise = Promise.resolve(maybeThenable);
+  const timeout = new Promise<never>((_resolve, reject) => {
+    const id = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+    // Let the timer be cleaned up by the race winner — no leak.
+    promise.finally(() => clearTimeout(id));
+  });
   return Promise.race([promise, timeout]);
 }
 

@@ -123,13 +123,20 @@ interface RemoteSnapshot {
   clientUpdatedAt: string | null;
 }
 
-// Timeout wrapper for supabase queries so stalled network calls don't hang
-// the app indefinitely. Using Promise.race with a timeout promise is
-// compatible with React Native Hermes (no AbortController requirement).
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  const timeout = new Promise<never>((_resolve, reject) =>
-    setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms),
-  );
+// Per-call timeout safety net (belt-and-suspenders with the global fetch
+// timeout in supabase.ts).  Promise.resolve() converts supabase-js
+// thenables to real Promises first so the race works reliably in Hermes.
+// See rosterSync.ts for the full rationale.
+function withTimeout<T>(
+  maybeThenable: Promise<T> | { then: (onfulfilled: (v: T) => any, onrejected: (e: any) => any) => any },
+  ms: number,
+  label: string,
+): Promise<T> {
+  const promise = Promise.resolve(maybeThenable);
+  const timeout = new Promise<never>((_resolve, reject) => {
+    const id = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+    promise.finally(() => clearTimeout(id));
+  });
   return Promise.race([promise, timeout]);
 }
 

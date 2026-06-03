@@ -93,6 +93,45 @@ const supabaseAnonKey = HARDCODED_SUPABASE_ANON_KEY;
 
 console.log('[supabase] init — hardcoded', { url: supabaseUrl, hasKey: !!supabaseAnonKey });
 
+// ---------------------------------------------------------------------------
+// Global network timeout for ALL supabase REST requests.
+//
+// The supabase-js client uses `fetch` for all REST API calls (not realtime
+// WebSockets). In React Native Hermes, the underlying `fetch` has no default
+// timeout — if the network stalls or the server never responds, the Promise
+// hangs forever. The per-call `Promise.race` wrappers in rosterSync / cloud
+// sync queue are unreliable in Hermes because supabase-js query builders are
+// "thenables" (not true Promises), and Hermes handles `Promise.race` with
+// thenables differently than JSC (the simulator engine).
+//
+// The fix: wrap `fetch` at the client level with an AbortController timeout.
+// This guarantees that EVERY supabase REST call — regardless of whether it's
+// called directly or through a query builder — will resolve or reject within
+// a fixed window. Realtime WebSocket connections use a separate path and are
+// unaffected.
+// ---------------------------------------------------------------------------
+const SUPABASE_FETCH_TIMEOUT_MS = 20000; // 20 s per REST call
+
+function createFetchWithTimeout(): typeof fetch {
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      console.warn('[supabase] fetch timeout after', SUPABASE_FETCH_TIMEOUT_MS, 'ms, aborting request to', String(input).slice(0, 120));
+      controller.abort();
+    }, SUPABASE_FETCH_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(input, {
+        ...init,
+        signal: controller.signal,
+      });
+      return response;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co',
   supabaseAnonKey || 'placeholder-key',
@@ -102,6 +141,9 @@ export const supabase = createClient(
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: Platform.OS === 'web',
+    },
+    global: {
+      fetch: createFetchWithTimeout(),
     },
   }
 );

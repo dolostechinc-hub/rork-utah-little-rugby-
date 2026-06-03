@@ -1226,6 +1226,11 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const cloudQueueRef = useRef<CloudSyncItem[]>([]);
   const isCloudSyncingRef = useRef<boolean>(false);
+  // Track when the current sync started so we can detect a stalled sync
+  // (e.g. a Supabase thenable that never resolves in Hermes) and force-
+  // reset the guard flag. Without this, one hung sync permanently blocks
+  // all future sync attempts, even across app foreground/background cycles.
+  const cloudSyncStartedAtRef = useRef<number>(0);
   // When a flush is already running and a new edit gets enqueued, we set
   // this flag so the in-flight flush can immediately kick another flush
   // when it finishes. Without this, rapid successive check-ins would sit
@@ -1299,14 +1304,32 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     const orgId = cloudOrgRef.current;
     if (!orgId) return null;
     if (isCloudSyncingRef.current) {
-      // Flush is already running. Mark "pending" so the in-flight call
-      // re-flushes once it finishes, picking up anything that was
-      // enqueued while it was running. This fixes the "kid 2 and 3 sit
-      // in the queue waiting" gap when a volunteer rapid-fires several
-      // check-ins back to back.
-      cloudFlushPendingRef.current = true;
-      console.log('[cloudSync] flush already in progress, marking re-flush pending');
-      return null;
+      // Stall guard: if the previous sync has been running for more than
+      // 45 s, it's likely hung (Hermes thenable stall, etc.). Force-reset
+      // the guard flag and allow a fresh attempt. The global fetch
+      // timeout (20 s) plus per-call timeouts (15-20 s) guarantee that no
+      // individual Supabase call can exceed ~20 s, so 45 s means the
+      // process is genuinely stuck at a higher level.
+      const elapsed = Date.now() - cloudSyncStartedAtRef.current;
+      if (cloudSyncStartedAtRef.current > 0 && elapsed > 45_000) {
+        console.warn(
+          '[cloudSync] previous flush stalled for',
+          elapsed,
+          'ms — force-resetting guard and retrying',
+        );
+        isCloudSyncingRef.current = false;
+        setIsCloudSyncing(false);
+        // Fall through to start a new flush below.
+      } else {
+        // Flush is already running. Mark "pending" so the in-flight call
+        // re-flushes once it finishes, picking up anything that was
+        // enqueued while it was running. This fixes the "kid 2 and 3 sit
+        // in the queue waiting" gap when a volunteer rapid-fires several
+        // check-ins back to back.
+        cloudFlushPendingRef.current = true;
+        console.log('[cloudSync] flush already in progress, marking re-flush pending');
+        return null;
+      }
     }
     const items = cloudQueueRef.current;
     if (items.length === 0) {
@@ -1317,6 +1340,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     }
     isCloudSyncingRef.current = true;
     setIsCloudSyncing(true);
+    cloudSyncStartedAtRef.current = Date.now();
     try {
       console.log('[cloudSync] flushing', items.length, 'items for org', orgId);
       // Audit Critical #2: pass the per-field merge function so items
@@ -1377,6 +1401,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     } finally {
       isCloudSyncingRef.current = false;
       setIsCloudSyncing(false);
+      cloudSyncStartedAtRef.current = 0;
       // If anything else asked for a flush while we were running, fire
       // one more pass on the next tick. We deliberately don't await it
       // (this is fire-and-forget) and we read the ref via the wrapper
