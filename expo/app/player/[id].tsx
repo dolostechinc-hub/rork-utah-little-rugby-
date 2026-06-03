@@ -27,6 +27,7 @@ import {
   ChevronRight,
   RotateCcw,
   Shield,
+  Building2,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -36,6 +37,7 @@ import Colors from '@/constants/colors';
 import { RestrictionStatus } from '@/types';
 import WeightRestrictionModal from '@/components/WeightRestrictionModal';
 import TeamAssignmentModal from '@/components/TeamAssignmentModal';
+import ClubPickerModal from '@/components/ClubPickerModal';
 import { formatTeamAssignments } from '@/utils/teamAssignments';
 import {
   ageGroupRank,
@@ -55,6 +57,7 @@ export default function PlayerDetailScreen() {
     updatePlayer,
     isUpdating,
     teams,
+    clubs,
     ageGroups,
     isPreviouslyAgeVerified,
     showTeamAssignment,
@@ -86,6 +89,8 @@ export default function PlayerDetailScreen() {
   const [showTeamModal, setShowTeamModal] = useState(false);
   const [isSavingTeam, setIsSavingTeam] = useState(false);
   const [isUncheckingIn, setIsUncheckingIn] = useState(false);
+  const [showClubModal, setShowClubModal] = useState(false);
+  const [isSavingClub, setIsSavingClub] = useState(false);
 
   const handleUncheckIn = () => {
     if (!player) return;
@@ -639,7 +644,55 @@ export default function PlayerDetailScreen() {
             )}
           </View>
 
-          {canEdit && showTeamAssignment && (
+          {isAdmin && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Club & Team</Text>
+
+              <TouchableOpacity
+                style={styles.clubCard}
+                onPress={() => setShowClubModal(true)}
+                activeOpacity={0.7}
+                disabled={isSavingClub}
+                testID="club-assignment-card"
+              >
+                <Building2 size={22} color={Colors.primary} />
+                <View style={styles.teamCardContent}>
+                  <Text style={styles.teamCardLabel}>Club</Text>
+                  <Text style={styles.teamCardValue}>
+                    {isSavingClub
+                      ? 'Saving…'
+                      : player.club || 'Not assigned — tap to select'}
+                  </Text>
+                </View>
+                <ChevronRight size={20} color={Colors.textMuted} />
+              </TouchableOpacity>
+
+              <View style={{ height: 12 }} />
+
+              <TouchableOpacity
+                style={styles.teamCard}
+                onPress={() => setShowTeamModal(true)}
+                activeOpacity={0.7}
+                disabled={isSavingTeam}
+                testID="team-assignment-card"
+              >
+                <Users size={22} color={Colors.primary} />
+                <View style={styles.teamCardContent}>
+                  <Text style={styles.teamCardLabel}>
+                    {player.teamName ? 'Assigned Teams' : 'No Teams Assigned'}
+                  </Text>
+                  <Text style={styles.teamCardValue}>
+                    {isSavingTeam
+                      ? 'Saving…'
+                      : formatTeamAssignments(player.teamName) || `Tap to assign (e.g. ${player.club || 'Club'} ${player.ageGroup || 'Age'} Blue)`}
+                  </Text>
+                </View>
+                <ChevronRight size={20} color={Colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {canEdit && showTeamAssignment && !isAdmin && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Team Assignment</Text>
               <TouchableOpacity
@@ -900,6 +953,31 @@ export default function PlayerDetailScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {player && isAdmin && (
+        <ClubPickerModal
+          visible={showClubModal}
+          onClose={() => setShowClubModal(false)}
+          currentClub={player.club}
+          clubs={clubs}
+          onSelect={async (clubName) => {
+            setIsSavingClub(true);
+            try {
+              console.log('Changing club for player:', player.id, '->', clubName);
+              await updatePlayer({ ...player, club: clubName });
+              if (Platform.OS !== 'web') {
+                void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              }
+            } catch (error) {
+              console.error('Failed to save club change:', error);
+              const message = error instanceof Error ? error.message : 'Unknown error';
+              Alert.alert('Could Not Change Club', message);
+            } finally {
+              setIsSavingClub(false);
+            }
+          }}
+        />
+      )}
 
       {player && canEdit && (
         <TeamAssignmentModal
@@ -1278,6 +1356,16 @@ const styles = StyleSheet.create({
   },
   teamBadgeEmptyText: {
     color: Colors.textMuted,
+  },
+  clubCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.surface,
+    padding: 16,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    gap: 12,
   },
   teamCard: {
     flexDirection: 'row',
