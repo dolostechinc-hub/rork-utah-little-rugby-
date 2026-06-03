@@ -77,7 +77,6 @@ export default function CheckInScreen() {
     refreshRosterFromCloud,
     coaches,
     coachTeams,
-    refreshRosterFromCloud,
   } = useRegistration() as ReturnType<typeof useRegistration> & {
     refreshRosterFromCloud: () => Promise<'ok' | 'no-org' | 'aborted' | 'error'>;
     coaches: Coach[];
