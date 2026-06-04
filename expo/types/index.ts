@@ -28,6 +28,10 @@ export interface Player {
   // of restrictionStatus -- a player can play up AND be in open division.
   playsUp?: boolean;
   calculatedAgeGroup?: string;
+  /** Client-managed monotonic timestamp set on every upsert, used for
+   *  per-field last-write-wins merge decisions. Never touched by the
+   *  DB trigger (unlike updated_at). */
+  clientUpdatedAt?: string;
 }
 
 export interface Club {

@@ -19,7 +19,6 @@ import {
   buildItem,
   mergeIntoQueue,
   flushCloudSyncQueue,
-  forcePushAllPlayers,
   type CloudSyncItem,
   type FlushResult,
 } from '@/lib/cloudSyncQueue';
@@ -107,13 +106,90 @@ function mergePlayerRecords(a: Player, b: Player): Player {
     return bv;
   };
   const isEmptyStr = (v: string | null | undefined) => !v || !String(v).trim();
-  const checkedIn = !!a.checkedIn || !!b.checkedIn;
-  let checkedInAt: string | null = null;
-  if (a.checkedInAt && b.checkedInAt) {
-    checkedInAt = new Date(a.checkedInAt) > new Date(b.checkedInAt) ? a.checkedInAt : b.checkedInAt;
+
+  // ── Row-level client timestamps for last-write-wins decisions ──────
+  const aTs = a.clientUpdatedAt ? Date.parse(a.clientUpdatedAt) : 0;
+  const bTs = b.clientUpdatedAt ? Date.parse(b.clientUpdatedAt) : 0;
+
+  // ── checkedIn / checkedInAt ──────────────────────────────────────
+  // Primary signal: checkedInAt (field-level timestamp).
+  // Secondary signal: clientUpdatedAt (detects deliberate clears where
+  // one side has checkedInAt=null but a more recent row timestamp).
+  const aCheckTs = a.checkedInAt ? Date.parse(a.checkedInAt) : 0;
+  const bCheckTs = b.checkedInAt ? Date.parse(b.checkedInAt) : 0;
+
+  let checkedIn: boolean;
+  let checkedInAt: string | null;
+
+  if (aCheckTs > 0 && bCheckTs > 0) {
+    // Both have been checked in at some point — the more recent action wins.
+    if (aCheckTs >= bCheckTs) {
+      checkedIn = true;
+      checkedInAt = a.checkedInAt;
+    } else {
+      checkedIn = true;
+      checkedInAt = b.checkedInAt;
+    }
+  } else if (aCheckTs > 0 && bCheckTs === 0) {
+    // Only A has a check-in timestamp. Is B a deliberate clear?
+    if (bTs > aCheckTs) {
+      // B was written more recently than A's check-in — deliberate clear.
+      checkedIn = false;
+      checkedInAt = null;
+    } else {
+      checkedIn = true;
+      checkedInAt = a.checkedInAt;
+    }
+  } else if (bCheckTs > 0 && aCheckTs === 0) {
+    // Only B has a check-in timestamp. Is A a deliberate clear?
+    if (aTs > bCheckTs) {
+      checkedIn = false;
+      checkedInAt = null;
+    } else {
+      checkedIn = true;
+      checkedInAt = b.checkedInAt;
+    }
   } else {
-    checkedInAt = a.checkedInAt || b.checkedInAt || null;
+    // Neither has a check-in timestamp.
+    checkedIn = false;
+    checkedInAt = null;
   }
+
+  // ── photoUri ─────────────────────────────────────────────────────
+  // Row-level last-write-wins via clientUpdatedAt. If timestamps are
+  // missing or equal, fall back to local (A) value for safety.
+  let photoUri: string | null;
+  if (a.photoUri && b.photoUri && aTs > 0 && bTs > 0) {
+    photoUri = aTs >= bTs ? a.photoUri : b.photoUri;
+  } else if (a.photoUri && !b.photoUri) {
+    photoUri = a.photoUri;
+  } else if (!a.photoUri && b.photoUri) {
+    // B has a photo but A doesn't. If B is clearly newer, take it.
+    // Otherwise keep A's null (don't resurrect a deleted photo from an
+    // older cloud row).
+    photoUri = bTs > aTs ? b.photoUri : null;
+  } else {
+    photoUri = a.photoUri || b.photoUri || null;
+  }
+
+  // ── weight ───────────────────────────────────────────────────────
+  let weight: string;
+  const aWeight = (a.weight ?? '').trim();
+  const bWeight = (b.weight ?? '').trim();
+  if (aWeight && bWeight && aTs > 0 && bTs > 0) {
+    weight = aTs >= bTs ? a.weight : b.weight;
+  } else if (aWeight && !bWeight) {
+    weight = a.weight;
+  } else if (!aWeight && bWeight) {
+    weight = bTs > aTs ? b.weight : '';
+  } else {
+    weight = aWeight || bWeight || '';
+  }
+
+  // ── clientUpdatedAt for the merged record ───────────────────────
+  const mergedClientUpdatedAt: string | undefined =
+    aTs >= bTs ? a.clientUpdatedAt : b.clientUpdatedAt;
+
   return {
     ...a,
     firstName: pick(a.firstName, b.firstName, isEmptyStr),
@@ -126,23 +202,14 @@ function mergePlayerRecords(a: Player, b: Player): Player {
     parentName: pick(a.parentName, b.parentName, isEmptyStr),
     parentPhone: pick(a.parentPhone, b.parentPhone, isEmptyStr),
     isAgeVerified: !!a.isAgeVerified || !!b.isAgeVerified,
-    photoUri: a.photoUri || b.photoUri || null,
-    weight: pick(a.weight ?? '', b.weight ?? '', isEmptyStr),
+    photoUri,
+    weight,
     checkedIn,
     checkedInAt,
-    // 'none' is a deliberate choice (user cleared the restriction), not
-    // an empty/default. Use nullish coalescing so an explicit 'none' on A
-    // wins over B's 'open_division' / 'penny_player' during roster sync
-    // and cloud conflict resolution. Without this a volunteer who clears
-    // a restriction would see it reappear after the next merge.
     restrictionStatus: a.restrictionStatus ?? b.restrictionStatus ?? 'none',
-    // playsUp was missing from the merge.  When the remote (B) record has
-    // playsUp=true but the local (A) hasn't loaded it yet (cold launch),
-    // we need to carry B's value forward.  A's value wins when both are
-    // present via the spread above, but explicit handling ensures it
-    // survives the dedupe / cloud-merge paths.
     playsUp: a.playsUp ?? b.playsUp ?? false,
     calculatedAgeGroup: a.calculatedAgeGroup || b.calculatedAgeGroup,
+    clientUpdatedAt: mergedClientUpdatedAt,
   };
 }
 
@@ -1238,6 +1305,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const cloudFlushPendingRef = useRef<boolean>(false);
   const cloudOrgRef = useRef<string | null>(null);
   cloudOrgRef.current = currentOrg?.id ?? null;
+  // Stamp every Supabase write with the auth user id so server-side
+  // operators can distinguish app-originated writes from direct DB edits.
+  const updatedByRef = useRef<string>('app:device');
+  updatedByRef.current = authUserId ? `app:${authUserId}` : 'app:device';
 
   useEffect(() => {
     cloudQueueRef.current = cloudQueue;
@@ -1348,7 +1419,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       // silently skipped. Only items that are actually `synced` or
       // `merged` (both have written something authoritative to Supabase)
       // are dropped from the queue. Failures stay in for the next retry.
-      const result = await flushCloudSyncQueue(orgId, items, mergePlayerRecords);
+      const result = await flushCloudSyncQueue(orgId, items, mergePlayerRecords, updatedByRef.current);
       const handled = new Set([...result.synced, ...result.merged]);
       const remaining = items
         .filter((i) => !handled.has(i.id))
@@ -2125,7 +2196,6 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     reconcile?: ReconcileResult;
   }> => {
     const orgId = cloudOrgRef.current;
-    const orgCode = currentOrgCodeRef.current;
     if (!orgId) {
       return { ok: false, synced: 0, skipped: 0, failed: 0, error: 'No organization selected.' };
     }
@@ -2135,70 +2205,39 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     isCloudSyncingRef.current = true;
     setIsCloudSyncing(true);
     try {
-      let reconcileResult: ReconcileResult | undefined;
-      if (orgCode) {
-        try {
-          console.log('[cloudSync] running final reconcile for org', orgCode);
-          reconcileResult = await runFinalReconcile(orgId, orgCode, dedupePlayers, mergePlayerRecords);
-          if (reconcileResult.mergedTotal > 0) {
-            memoryPlayerCache = null;
-            try {
-              const stored = await AsyncStorage.getItem(playersKey());
-              const merged: Player[] = stored ? JSON.parse(stored) : [];
-              memoryPlayerCache = merged;
-              queryClient.setQueryData(['local-players', orgScopeRef.current], merged);
-            } catch (err) {
-              console.warn('[cloudSync] failed to refresh local cache after reconcile:', err);
-            }
-          }
-        } catch (err) {
-          console.warn('[cloudSync] reconcile threw, continuing with regular force-push:', err);
-        }
-      }
+      // Flush ONLY the pending cloud queue — never the full in-memory roster.
+      // The app is a downstream consumer: it reads the roster and writes only
+      // individual user actions (check-ins, profile edits). Pushing the full
+      // cached roster back would overwrite server-side corrections and
+      // resurrect stale data. See Fix 2 post-mortem.
+      const queueItems = cloudQueueRef.current;
+      console.log('[cloudSync] force-syncing pending queue only:', queueItems.length, 'items');
+      const result = await flushCloudSyncQueue(orgId, queueItems, mergePlayerRecords, updatedByRef.current);
 
-      const all = playersRef.current;
-      console.log('[cloudSync] force-syncing entire roster:', all.length, 'players');
-      const result = await forcePushAllPlayers(orgId, all, mergePlayerRecords);
-
-      // After a force push, also try to drain anything queued.
-      const remainingQueue = cloudQueueRef.current;
-      let queueResult: FlushResult = { synced: [], merged: [], failed: [] };
-      if (remainingQueue.length > 0) {
-        queueResult = await flushCloudSyncQueue(orgId, remainingQueue, mergePlayerRecords);
-        const handled = new Set([...queueResult.synced, ...queueResult.merged]);
-        const remaining = remainingQueue
-          .filter((i) => !handled.has(i.id))
-          .map((i) => {
-            const fail = queueResult.failed.find((f) => f.itemId === i.id);
-            return {
-              ...i,
-              retries: i.retries + 1,
-              lastTriedAt: new Date().toISOString(),
-              lastError: fail?.error ?? i.lastError,
-            };
-          });
-        await persistCloudQueue(orgId, remaining);
-      }
+      // Drop handled items from the queue; keep failures for next retry.
+      const handled = new Set([...result.synced, ...result.merged]);
+      const remaining = queueItems
+        .filter((i) => !handled.has(i.id))
+        .map((i) => {
+          const fail = result.failed.find((f) => f.itemId === i.id);
+          return {
+            ...i,
+            retries: i.retries + 1,
+            lastTriedAt: new Date().toISOString(),
+            lastError: fail?.error ?? i.lastError,
+          };
+        });
+      await persistCloudQueue(orgId, remaining);
 
       const now = new Date().toISOString();
       setLastCloudSyncedAt(now);
       await saveLastCloudSync(orgId, now);
+      setLastCloudSyncResult(result);
 
-      const synced =
-        result.synced.length +
-        result.merged.length +
-        queueResult.synced.length +
-        queueResult.merged.length +
-        (reconcileResult?.pushed ?? 0);
-      const skipped = reconcileResult?.skipped ?? 0;
-      const failed = result.failed.length + queueResult.failed.length + (reconcileResult?.failed ?? 0);
-      setLastCloudSyncResult({
-        synced: [...result.synced, ...queueResult.synced],
-        merged: [...result.merged, ...queueResult.merged],
-        failed: [...result.failed, ...queueResult.failed],
-      });
-      console.log('[cloudSync] force-sync complete', { synced, skipped, failed, reconcile: reconcileResult });
-      return { ok: failed === 0, synced, skipped, failed, reconcile: reconcileResult };
+      const synced = result.synced.length + result.merged.length;
+      const failed = result.failed.length;
+      console.log('[cloudSync] force-sync complete', { synced, failed });
+      return { ok: failed === 0, synced, skipped: 0, failed };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn('[cloudSync] force-sync failed:', message);
@@ -2207,7 +2246,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       isCloudSyncingRef.current = false;
       setIsCloudSyncing(false);
     }
-  }, [persistCloudQueue, queryClient, playersKey]);
+  }, [persistCloudQueue]);
 
   // ---------------------------------------------------------------------------
   // One-shot "final reconcile" that runs automatically on launch the first time

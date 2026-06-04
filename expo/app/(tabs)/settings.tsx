@@ -2096,19 +2096,20 @@ export default function SettingsScreen() {
                 Alert.alert('Sync failed', result.error);
                 return;
               }
-              const recon = result.reconcile;
-              const reconLine = recon
-                ? `\n\nReconcile: scanned ${recon.scopesScanned} local cache${recon.scopesScanned === 1 ? '' : 's'}, found ${recon.cloudOrgsFound} cloud org${recon.cloudOrgsFound === 1 ? '' : 's'} with this invite code, merged ${recon.mergedTotal} unique players.${recon.duplicateOrgIdsMerged.length > 0 ? ` Combined ${recon.duplicateOrgIdsMerged.length} duplicate org${recon.duplicateOrgIdsMerged.length === 1 ? '' : 's'} into this one.` : ''}`
-                : '';
               if (result.failed > 0) {
                 Alert.alert(
                   'Partial sync',
-                  `${result.synced} synced, ${result.skipped} kept (cloud was newer), ${result.failed} failed. The app will keep retrying the failures automatically.${reconLine}`,
+                  `${result.synced} changes pushed to cloud, ${result.failed} failed. The app will keep retrying the failures automatically.`,
+                );
+              } else if (result.synced > 0) {
+                Alert.alert(
+                  'Sync complete',
+                  `${result.synced} changes pushed to cloud.`,
                 );
               } else {
                 Alert.alert(
                   'Sync complete',
-                  `${result.synced} pushed to cloud, ${result.skipped} kept (cloud already had newer data).${reconLine}`,
+                  'No pending changes to sync.',
                 );
               }
             }}
@@ -2127,11 +2128,10 @@ export default function SettingsScreen() {
           <View style={styles.cloudInfoRow}>
             <Info size={14} color={Colors.textSecondary} />
             <Text style={styles.cloudInfoText}>
-              Sweeps every cached player on this device (including older orgs left
-              behind by previous app versions), merges with the cloud roster
-              (newest edit wins), and pushes the combined result to the shared
-              cloud. If duplicate copies of this org exist, they are merged into
-              one.
+              Pushes any pending local changes (check-ins, profile edits, photos)
+              to the cloud. Only changes you have actually made are synced — the
+              full roster is never bulk-written, so server-side corrections are
+              preserved.
             </Text>
           </View>
         </View>

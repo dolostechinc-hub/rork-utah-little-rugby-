@@ -122,19 +122,23 @@ async function pullAllCloudRosters(orgIds: string[]): Promise<Player[]> {
 }
 
 /**
- * One-shot reconcile that runs the "final update" the admin asked for:
+ * One-shot reconcile that merges local + cloud rosters and persists the
+ * result locally.
  *
  * 1. Sweep every AsyncStorage scope on this device (current org + any
  *    legacy org_ids left over from previous app versions / org id changes).
- * 2. Look up every cloud org that shares the same invite code as the
- *    org the user is currently signed into. If duplicates exist, pull
- *    their rosters too.
+ * 2. Pull the cloud roster for the canonical org.
  * 3. Combine local + cloud rosters and run the existing dedupe (which
  *    keeps the richest record per name+DOB and merges photos / weight /
  *    check-in / verification flags).
- * 4. Force-push the merged roster to the canonical cloud org with a
- *    "now" timestamp so this update wins over any stale data.
- * 5. Persist the merged roster locally under the canonical org scope.
+ * 4. Persist the merged roster locally under the canonical org scope.
+ *
+ * IMPORTANT: This function deliberately does NOT push the merged roster
+ * back to Supabase. The app is a downstream consumer that reads the
+ * roster from the cloud and only writes individual user actions (check-ins,
+ * profile edits). A bulk write-back would overwrite server-side corrections
+ * and resurrect stale data. See the post-mortem on the ~600-row burst
+ * write that prompted this fix.
  *
  * The caller passes in `dedupePlayers` to avoid pulling the entire
  * RegistrationContext into this module.
@@ -162,35 +166,11 @@ export async function runFinalReconcile(
   const { deduped } = dedupePlayers(combined);
   console.log('[finalReconcile] merged', combined.length, '->', deduped.length, 'unique players');
 
+  // Deliberately do NOT push the merged roster back to Supabase.
+  // The app is a downstream consumer — it reads the roster and writes only
+  // individual user actions. A bulk write-back overwrites server-side
+  // corrections and resurrects stale data. See function jsdoc above.
   const now = new Date().toISOString();
-  const items: CloudSyncItem[] = deduped.map((p, idx) => ({
-    id: `recon-${now}-${idx}-${p.id}`,
-    orgId: canonicalOrgId,
-    playerId: p.id,
-    player: p,
-    lastEditedAt: now,
-    retries: 0,
-  }));
-
-  let pushed = 0;
-  let skipped = 0;
-  let failed = 0;
-  let lastError: string | undefined;
-
-  if (items.length > 0) {
-    try {
-      const result = await flushCloudSyncQueue(canonicalOrgId, items, mergeFn);
-      pushed = result.synced.length + result.merged.length;
-      skipped = 0;
-      failed = result.failed.length;
-      if (result.failed.length > 0) {
-        lastError = result.failed[0]?.error;
-      }
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-      console.warn('[finalReconcile] flushCloudSyncQueue threw:', lastError);
-    }
-  }
 
   try {
     await AsyncStorage.setItem(
@@ -209,27 +189,24 @@ export async function runFinalReconcile(
 
   const duplicateOrgIdsMerged = cloudOrgIds.filter((id) => id !== canonicalOrgId);
 
-  console.log('[finalReconcile] done', {
-    pushed,
-    skipped,
-    failed,
+  console.log('[finalReconcile] done (local-only — no data written to Supabase)', {
     cloudOrgsFound: cloudOrgIds.length,
     duplicateOrgIdsMerged,
+    mergedTotal: deduped.length,
   });
 
   return {
-    ok: failed === 0,
+    ok: true,
     scopesScanned: scopes.length,
     localPlayersCollected: localPlayers.length,
     cloudOrgsFound: cloudOrgIds.length,
     cloudPlayersCollected: cloudPlayers.length,
     mergedTotal: deduped.length,
-    pushed,
-    skipped,
-    failed,
+    pushed: 0,
+    skipped: 0,
+    failed: 0,
     canonicalOrgId,
     duplicateOrgIdsMerged,
-    error: lastError,
   };
 }
 

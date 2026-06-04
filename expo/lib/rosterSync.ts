@@ -72,6 +72,7 @@ export function rowToPlayer(row: RosterPlayerRow): Player {
     restrictionStatus: restriction,
     playsUp: row.plays_up ?? isLegacyPlayUp,
     calculatedAgeGroup: row.calculated_age_group ?? undefined,
+    clientUpdatedAt: row.client_updated_at ?? undefined,
   };
 }
 
