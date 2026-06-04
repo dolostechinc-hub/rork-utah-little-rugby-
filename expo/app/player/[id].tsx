@@ -492,13 +492,13 @@ export default function PlayerDetailScreen() {
                 !photoUri && styles.photoRequired,
               ]}
               onPress={() => {
-                if (canEdit) {
-                  handleTakePhoto();
-                } else if (photoUri) {
+                if (photoUri) {
                   setIsPhotoExpanded(true);
+                } else if (canEdit) {
+                  handleTakePhoto();
                 }
               }}
-              activeOpacity={canEdit || photoUri ? 0.8 : 1}
+              activeOpacity={photoUri ? 0.8 : canEdit ? 0.8 : 1}
               disabled={!canEdit && !photoUri}
             >
               {photoUri ? (
@@ -510,9 +510,14 @@ export default function PlayerDetailScreen() {
                 </View>
               )}
               {canEdit && (
-                <View style={[styles.cameraButton, !photoUri && styles.cameraButtonRequired]}>
+                <TouchableOpacity
+                  style={[styles.cameraButton, !photoUri && styles.cameraButtonRequired]}
+                  onPress={handleTakePhoto}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
                   <Camera size={20} color={Colors.white} />
-                </View>
+                </TouchableOpacity>
               )}
             </TouchableOpacity>
 
