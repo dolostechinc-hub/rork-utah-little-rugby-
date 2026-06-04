@@ -37,3 +37,30 @@ export function playerHasTeam(
   if (!target) return true;
   return parseTeamAssignments(playerTeamName).some((teamName) => teamName.toLowerCase() === target);
 }
+
+/**
+ * Sort key for a team name string. Teams matching "U{number} ..." are sorted
+ * by the age number numerically, then alphabetically within each age group.
+ * Non-matching names sort to the end, alphabetically among themselves.
+ */
+function teamSortKey(name: string): [number, string] {
+  const m = name.match(/^U(\d+)\s+(.*)$/i);
+  if (m) {
+    const age = parseInt(m[1], 10);
+    // Sort by age number then the remaining name text.
+    return [age, m[2].toLowerCase()];
+  }
+  // Non-U-prefixed teams go to the bottom, sorted alphabetically.
+  return [Number.POSITIVE_INFINITY, name.toLowerCase()];
+}
+
+/**
+ * Comparator for team names using the U-age sort key.
+ * Pass to Array.sort() for any list of objects with a `name` string property.
+ */
+export function compareTeamByName(a: { name: string }, b: { name: string }): number {
+  const [ageA, restA] = teamSortKey(a.name);
+  const [ageB, restB] = teamSortKey(b.name);
+  if (ageA !== ageB) return ageA - ageB;
+  return restA.localeCompare(restB);
+}

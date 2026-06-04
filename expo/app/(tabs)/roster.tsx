@@ -31,7 +31,7 @@ import SyncStatusBadge from '@/components/SyncStatusBadge';
 import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
 import { Player, RestrictionStatus, Coach } from '@/types';
-import { playerHasTeam } from '@/utils/teamAssignments';
+import { playerHasTeam, compareTeamByName } from '@/utils/teamAssignments';
 import { getRestrictionStatusLabel, getRestrictionStatusColor, isActuallyPlayingUp, normalizeAgeGroup } from '@/utils/playerUtils';
 
 // Don't re-pull the cloud roster on every focus event -- tab-switching
@@ -300,17 +300,8 @@ export default function RosterScreen() {
       seen.add(key);
       unique.push(t);
     }
-    return unique;
+    return unique.sort(compareTeamByName);
   }, [teamNames, selectedClub, selectedAgeGroup, selectedDivision]);
-
-  React.useEffect(() => {
-    if (!selectedTeamName) return;
-    const stillValid = availableTeams.some((t) => t.name === selectedTeamName);
-    if (!stillValid) {
-      console.log('[roster] clearing team filter because it no longer matches filters');
-      setSelectedTeamName(null);
-    }
-  }, [availableTeams, selectedTeamName]);
 
   if (isLoading) {
     return (

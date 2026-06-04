@@ -2327,9 +2327,7 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       });
     });
 
-    return Array.from(uniqueTeams.values()).sort((a, b) => 
-      a.name.localeCompare(b.name)
-    );
+    return Array.from(uniqueTeams.values()).sort(compareTeamByName);
   }, [players, isConnected, sheetsMetadataQuery.data, importedTeams]);
 
   const ageGroups: AgeGroup[] = useMemo(() => {

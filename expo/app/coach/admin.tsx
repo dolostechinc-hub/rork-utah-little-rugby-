@@ -35,6 +35,7 @@ import CoachCSVImportModal, { type ParsedCoach } from '@/components/CoachCSVImpo
 import FilterDropdown from '@/components/FilterDropdown';
 import Colors from '@/constants/colors';
 import type { Coach, CoachTeam, Player } from '@/types';
+import { compareTeamByName } from '@/utils/teamAssignments';
 
 type CoachAdminAPI = {
   coaches: Coach[];
@@ -104,11 +105,7 @@ export default function CoachAdminScreen() {
       const k = teamKey(draft);
       if (!map.has(k)) map.set(k, draft);
     }
-    return Array.from(map.values()).sort((a, b) =>
-      `${a.club} ${a.ageGroup} ${a.division} ${a.teamName}`.localeCompare(
-        `${b.club} ${b.ageGroup} ${b.division} ${b.teamName}`,
-      ),
-    );
+    return Array.from(map.values()).sort(compareTeamByName);
   }, [players]);
 
   // Clubs derived from the actual player roster so they always match

@@ -21,7 +21,7 @@ import OrgMovedBanner from '@/components/OrgMovedBanner';
 import CoachSection from '@/components/CoachSection';
 import Colors from '@/constants/colors';
 import { useRouter } from 'expo-router';
-import { playerHasTeam } from '@/utils/teamAssignments';
+import { playerHasTeam, compareTeamByName } from '@/utils/teamAssignments';
 import { normalizeAgeGroup } from '@/utils/playerUtils';
 
 // FilterDropdown identifies its rows by `id` and surfaces `name` to the
@@ -169,7 +169,7 @@ export default function CheckInScreen() {
       seen.add(key);
       unique.push(t);
     }
-    return unique;
+    return unique.sort(compareTeamByName);
   }, [teams, filters.club, filters.ageGroup, filters.division]);
 
   useEffect(() => {
