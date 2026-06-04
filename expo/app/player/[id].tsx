@@ -11,6 +11,9 @@ import {
   Platform,
   KeyboardAvoidingView,
   Keyboard,
+  Modal,
+  Pressable,
+  StatusBar,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import {
@@ -28,6 +31,7 @@ import {
   RotateCcw,
   Shield,
   Building2,
+  X,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
@@ -91,6 +95,7 @@ export default function PlayerDetailScreen() {
   const [isUncheckingIn, setIsUncheckingIn] = useState(false);
   const [showClubModal, setShowClubModal] = useState(false);
   const [isSavingClub, setIsSavingClub] = useState(false);
+  const [isPhotoExpanded, setIsPhotoExpanded] = useState(false);
 
   const handleUncheckIn = () => {
     if (!player) return;
@@ -486,9 +491,15 @@ export default function PlayerDetailScreen() {
                 styles.photoContainer,
                 !photoUri && styles.photoRequired,
               ]}
-              onPress={canEdit ? handleTakePhoto : undefined}
-              activeOpacity={canEdit ? 0.8 : 1}
-              disabled={!canEdit}
+              onPress={() => {
+                if (canEdit) {
+                  handleTakePhoto();
+                } else if (photoUri) {
+                  setIsPhotoExpanded(true);
+                }
+              }}
+              activeOpacity={canEdit || photoUri ? 0.8 : 1}
+              disabled={!canEdit && !photoUri}
             >
               {photoUri ? (
                 <Image source={{ uri: photoUri }} style={styles.photo} />
@@ -498,9 +509,11 @@ export default function PlayerDetailScreen() {
                   <Text style={styles.photoRequiredText}>Photo Required</Text>
                 </View>
               )}
-              <View style={[styles.cameraButton, !photoUri && styles.cameraButtonRequired]}>
-                <Camera size={20} color={Colors.white} />
-              </View>
+              {canEdit && (
+                <View style={[styles.cameraButton, !photoUri && styles.cameraButtonRequired]}>
+                  <Camera size={20} color={Colors.white} />
+                </View>
+              )}
             </TouchableOpacity>
 
             {!photoUri && (
@@ -1055,6 +1068,32 @@ export default function PlayerDetailScreen() {
           currentAgeGroup={effectiveAgeGroup}
         />
       )}
+
+      <Modal
+        visible={isPhotoExpanded}
+        transparent={false}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setIsPhotoExpanded(false)}
+      >
+        <View style={styles.expandedPhotoContainer}>
+          <StatusBar barStyle="light-content" />
+          <TouchableOpacity
+            style={styles.closeButton}
+            onPress={() => setIsPhotoExpanded(false)}
+            activeOpacity={0.7}
+          >
+            <X size={28} color={Colors.white} />
+          </TouchableOpacity>
+          {photoUri ? (
+            <Image
+              source={{ uri: photoUri }}
+              style={styles.expandedPhoto}
+              resizeMode="contain"
+            />
+          ) : null}
+        </View>
+      </Modal>
     </>
   );
 }
@@ -1518,5 +1557,27 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600' as const,
     color: Colors.error,
+  },
+  expandedPhotoContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  expandedPhoto: {
+    width: '100%' as const,
+    height: '80%' as const,
+  },
+  closeButton: {
+    position: 'absolute',
+    top: 60,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
   },
 });
