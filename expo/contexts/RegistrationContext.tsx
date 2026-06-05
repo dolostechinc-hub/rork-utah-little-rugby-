@@ -55,7 +55,7 @@ import {
   subscribeOrgEventMode,
 } from '@/lib/eventModeSync';
 import { fetchSheetCsv, parseCSV } from '@/lib/googleSheetsCsv';
-import { parseTeamAssignments, playerHasTeam } from '@/utils/teamAssignments';
+import { parseTeamAssignments, playerHasTeam, compareTeamByName } from '@/utils/teamAssignments';
 import { normalizeAgeGroup } from '@/utils/playerUtils';
 import {
   fetchCoaches,
