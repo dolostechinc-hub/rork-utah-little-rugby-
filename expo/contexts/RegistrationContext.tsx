@@ -101,6 +101,11 @@ function playerDedupeKey(p: { firstName: string; lastName: string; dateOfBirth: 
 }
 
 function mergePlayerRecords(a: Player, b: Player): Player {
+  // Safety: if either record is null/undefined (corrupt cache edge case),
+  // return the other unchanged rather than throwing.
+  if (!a) return b;
+  if (!b) return a;
+
   const pick = <T,>(av: T, bv: T, isEmpty: (v: T) => boolean): T => {
     if (!isEmpty(av)) return av;
     return bv;
@@ -225,9 +230,16 @@ function scorePlayer(p: Player): number {
 }
 
 export function dedupePlayers(list: Player[]): { deduped: Player[]; duplicateIds: string[] } {
+  // Filter out null/undefined entries that can appear if AsyncStorage
+  // returns a partially-corrupt JSON array from a previous crash.
+  const clean = list.filter((p): p is Player => !!p);
+  if (clean.length !== list.length) {
+    console.warn('[dedupe] filtered', list.length - clean.length, 'null/undefined entries from player list');
+  }
+
   const groups = new Map<string, Player[]>();
   const noKey: Player[] = [];
-  for (const p of list) {
+  for (const p of clean) {
     const key = playerDedupeKey(p);
     if (!key) {
       noKey.push(p);
@@ -826,7 +838,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     if (!currentOrg?.id) return;
     let cancelled = false;
 
-    void refreshRosterFromCloud();
+    refreshRosterFromCloud().catch((err) => {
+      console.warn('[rosterSync] initial fetch failed:', err);
+    });
 
     const unsubscribe = subscribeToRoster(currentOrg.id, (change) => {
       if (cancelled) return;
@@ -853,7 +867,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     const handleChange = (nextState: AppStateStatus) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
         console.log('[appState] app returned to foreground, refreshing roster from cloud');
-        void refreshRosterFromCloud();
+        refreshRosterFromCloud().catch((err) => {
+          console.warn('[rosterSync] foreground refresh failed:', err);
+        });
       }
       appStateRef.current = nextState;
     };
@@ -1503,7 +1519,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       const orgId = currentOrg?.id;
       if (!orgId) return;
       enqueueCloudWrite(player);
-      void flushCloudQueueNow();
+      flushCloudQueueNow().catch((err) => {
+        console.warn('[cloudSync] pushPlayer flush failed:', err);
+      });
     },
     [currentOrg?.id, enqueueCloudWrite, flushCloudQueueNow],
   );
@@ -1513,7 +1531,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       const orgId = currentOrg?.id;
       if (!orgId || playersBatch.length === 0) return;
       enqueueCloudWrites(playersBatch);
-      void flushCloudQueueNow();
+      flushCloudQueueNow().catch((err) => {
+        console.warn('[cloudSync] pushPlayers flush failed:', err);
+      });
     },
     [currentOrg?.id, enqueueCloudWrites, flushCloudQueueNow],
   );
@@ -1613,7 +1633,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
             for (const p of patched) {
               enqueueCloudWrite(p);
             }
-            void flushCloudQueueNow();
+            flushCloudQueueNow().catch((err2) => {
+              console.warn('[cloudSync] photo-patch flush failed:', err2);
+            });
           }
         } catch (err) {
           console.warn('[photoUploadQueue] patch-back failed:', err);
@@ -1651,8 +1673,12 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   useEffect(() => {
     const orgId = currentOrg?.id;
     if (!orgId) return;
-    void flushCloudQueueNow();
-    void flushPhotoQueueNow();
+    flushCloudQueueNow().catch((err) => {
+      console.warn('[cloudSync] auto-flush failed:', err);
+    });
+    flushPhotoQueueNow().catch((err) => {
+      console.warn('[photoUploadQueue] auto-flush failed:', err);
+    });
   }, [currentOrg?.id, flushCloudQueueNow, flushPhotoQueueNow]);
 
   useEffect(() => {
@@ -1661,8 +1687,12 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       setIsOnline(online);
       if (online && cloudOrgRef.current) {
         console.log('[cloudSync] network back online, flushing queues');
-        void flushCloudQueueNow();
-        void flushPhotoQueueNow();
+        flushCloudQueueNow().catch((err) => {
+          console.warn('[cloudSync] reconnect flush failed:', err);
+        });
+        flushPhotoQueueNow().catch((err) => {
+          console.warn('[photoUploadQueue] reconnect flush failed:', err);
+        });
       }
     });
     return () => unsubscribe();
@@ -1672,7 +1702,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   useEffect(() => {
     if (cloudQueue.length === 0) return;
     const id = setInterval(() => {
-      void flushCloudQueueNow();
+      flushCloudQueueNow().catch((err) => {
+        console.warn('[cloudSync] periodic flush failed:', err);
+      });
     }, 30000);
     return () => clearInterval(id);
   }, [cloudQueue.length, flushCloudQueueNow]);
@@ -2304,7 +2336,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         }
       }
     };
-    void launch();
+    launch().catch((err) => {
+      console.warn('[cloudSync] launch reconcile failed:', err);
+    });
     return () => {
       cancelled = true;
     };

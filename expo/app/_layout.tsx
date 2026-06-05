@@ -2,8 +2,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Linking from 'expo-linking';
-import React, { useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import React, { Component, useEffect, useState } from 'react';
+import { Platform, View, Text, TouchableOpacity } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { RegistrationProvider } from '@/contexts/RegistrationContext';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -16,6 +16,89 @@ import CustomSplashScreen from '@/components/SplashScreen';
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
+
+// ---------------------------------------------------------------------------
+// Error Boundary — catches render-time exceptions so a single provider throw
+// doesn't crash the entire app. In production, Hermes kills the process on
+// unhandled rejections AND uncaught render exceptions unless caught here.
+// ---------------------------------------------------------------------------
+interface ErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class AppErrorBoundary extends Component<
+  { children: React.ReactNode },
+  ErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo): void {
+    console.error('[ErrorBoundary] caught fatal error:', error.message, info.componentStack);
+  }
+
+  handleReset = (): void => {
+    this.setState({ hasError: false, error: null });
+  };
+
+  render(): React.ReactNode {
+    if (this.state.hasError) {
+      return (
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: '#FFFFFF',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 24,
+          }}
+        >
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: '600',
+              color: '#1A1A1A',
+              marginBottom: 8,
+            }}
+          >
+            Something went wrong
+          </Text>
+          <Text
+            style={{
+              fontSize: 14,
+              color: '#666666',
+              textAlign: 'center',
+              marginBottom: 24,
+            }}
+          >
+            The app encountered an unexpected error. Please try restarting.
+          </Text>
+          <TouchableOpacity
+            onPress={this.handleReset}
+            style={{
+              backgroundColor: '#0B7A4B',
+              paddingHorizontal: 24,
+              paddingVertical: 12,
+              borderRadius: 8,
+            }}
+          >
+            <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600' }}>
+              Try Again
+            </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function RootLayoutNav() {
   return (
@@ -91,6 +174,30 @@ export default function RootLayout() {
     SplashScreen.hideAsync();
   }, []);
 
+  // ── Global unhandled promise rejection handler ──────────────────────
+  // In Hermes (production), unhandled rejections are FATAL and crash the
+  // app to the home screen. This handler catches them and logs the error
+  // instead, preventing the crash. JSC (dev) just shows a yellow box.
+  useEffect(() => {
+    const handler = (event: PromiseRejectionEvent) => {
+      console.error(
+        '[global] unhandled promise rejection — prevented Hermes crash:',
+        event.reason instanceof Error ? event.reason.message : String(event.reason),
+      );
+      event.preventDefault();
+    };
+    // @ts-expect-error — Hermes-specific global hook; safe no-op on JSC
+    if (typeof globalThis.addEventListener === 'function') {
+      globalThis.addEventListener('unhandledrejection', handler);
+    }
+    return () => {
+      // @ts-expect-error
+      if (typeof globalThis.removeEventListener === 'function') {
+        globalThis.removeEventListener('unhandledrejection', handler);
+      }
+    };
+  }, []);
+
   const handleSplashFinish = () => {
     setShowSplash(false);
   };
@@ -100,20 +207,22 @@ export default function RootLayout() {
   }
 
   return (
-    <trpc.Provider client={trpcClient} queryClient={queryClient}>
-      <QueryClientProvider client={queryClient}>
-        <GestureHandlerRootView style={{ flex: 1 }}>
-          <AuthProvider>
-            <OrganizationProvider>
-              <RegistrationProvider>
-                <AgeGroupRulesProvider>
-                  <RootLayoutNav />
-                </AgeGroupRulesProvider>
-              </RegistrationProvider>
-            </OrganizationProvider>
-          </AuthProvider>
-        </GestureHandlerRootView>
-      </QueryClientProvider>
-    </trpc.Provider>
+    <AppErrorBoundary>
+      <trpc.Provider client={trpcClient} queryClient={queryClient}>
+        <QueryClientProvider client={queryClient}>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <AuthProvider>
+              <OrganizationProvider>
+                <RegistrationProvider>
+                  <AgeGroupRulesProvider>
+                    <RootLayoutNav />
+                  </AgeGroupRulesProvider>
+                </RegistrationProvider>
+              </OrganizationProvider>
+            </AuthProvider>
+          </GestureHandlerRootView>
+        </QueryClientProvider>
+      </trpc.Provider>
+    </AppErrorBoundary>
   );
 }
