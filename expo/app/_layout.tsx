@@ -3,7 +3,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import * as Linking from 'expo-linking';
 import React, { Component, useEffect, useState } from 'react';
-import { Platform, View, Text, TouchableOpacity } from 'react-native';
+import { Platform, View, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { RegistrationProvider } from '@/contexts/RegistrationContext';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -25,6 +25,7 @@ const queryClient = new QueryClient();
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
+  componentStack: string | null;
 }
 
 class AppErrorBoundary extends Component<
@@ -33,72 +34,109 @@ class AppErrorBoundary extends Component<
 > {
   constructor(props: { children: React.ReactNode }) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, componentStack: null };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
     return { hasError: true, error };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error('[ErrorBoundary] caught fatal error:', error.message, info.componentStack);
+    // Surface the FULL error so it shows in `npx react-native log-ios`,
+    // adb logcat, and any device console — not just a generic string.
+    console.error('[ErrorBoundary] caught fatal error');
+    console.error('[ErrorBoundary] message:', error?.message ?? '(no message)');
+    console.error('[ErrorBoundary] name:', error?.name ?? '(no name)');
+    console.error('[ErrorBoundary] stack:', error?.stack ?? '(no stack)');
+    console.error('[ErrorBoundary] componentStack:', info?.componentStack ?? '(no componentStack)');
+    this.setState({ componentStack: info?.componentStack ?? null });
   }
 
   handleReset = (): void => {
-    this.setState({ hasError: false, error: null });
+    this.setState({ hasError: false, error: null, componentStack: null });
   };
 
   render(): React.ReactNode {
     if (this.state.hasError) {
+      const { error, componentStack } = this.state;
       return (
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: '#FFFFFF',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 24,
-          }}
-        >
-          <Text
-            style={{
-              fontSize: 18,
-              fontWeight: '600',
-              color: '#1A1A1A',
-              marginBottom: 8,
-            }}
-          >
-            Something went wrong
-          </Text>
-          <Text
-            style={{
-              fontSize: 14,
-              color: '#666666',
-              textAlign: 'center',
-              marginBottom: 24,
-            }}
-          >
-            The app encountered an unexpected error. Please try restarting.
-          </Text>
-          <TouchableOpacity
-            onPress={this.handleReset}
-            style={{
-              backgroundColor: '#0B7A4B',
-              paddingHorizontal: 24,
-              paddingVertical: 12,
-              borderRadius: 8,
-            }}
-          >
-            <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600' }}>
-              Try Again
+        <View style={{ flex: 1, backgroundColor: '#FFFFFF', paddingTop: 64 }}>
+          <View style={{ paddingHorizontal: 24, paddingBottom: 12 }}>
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: '600',
+                color: '#B00020',
+                marginBottom: 8,
+              }}
+            >
+              Startup error (debug)
             </Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={this.handleReset}
+              style={{
+                alignSelf: 'flex-start',
+                backgroundColor: '#0B7A4B',
+                paddingHorizontal: 20,
+                paddingVertical: 10,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '600' }}>
+                Try Again
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: 24, paddingTop: 0 }}
+          >
+            <Text style={styles.debugLabel}>Message</Text>
+            <Text selectable style={styles.debugValue}>
+              {error?.message ?? '(no message)'}
+            </Text>
+
+            <Text style={styles.debugLabel}>Name</Text>
+            <Text selectable style={styles.debugValue}>
+              {error?.name ?? '(no name)'}
+            </Text>
+
+            <Text style={styles.debugLabel}>Stack</Text>
+            <Text selectable style={styles.debugMono}>
+              {error?.stack ?? '(no stack)'}
+            </Text>
+
+            <Text style={styles.debugLabel}>Component stack</Text>
+            <Text selectable style={styles.debugMono}>
+              {componentStack ?? '(no component stack)'}
+            </Text>
+          </ScrollView>
         </View>
       );
     }
     return this.props.children;
   }
 }
+
+const styles = {
+  debugLabel: {
+    fontSize: 12,
+    fontWeight: '700' as const,
+    color: '#444444',
+    marginTop: 16,
+    marginBottom: 4,
+    textTransform: 'uppercase' as const,
+  },
+  debugValue: {
+    fontSize: 14,
+    color: '#1A1A1A',
+  },
+  debugMono: {
+    fontSize: 12,
+    color: '#1A1A1A',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+};
 
 function RootLayoutNav() {
   return (
