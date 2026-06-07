@@ -9,9 +9,11 @@ import { RegistrationProvider } from '@/contexts/RegistrationContext';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { OrganizationProvider } from '@/contexts/OrganizationContext';
 import { AgeGroupRulesProvider } from '@/contexts/AgeGroupRulesContext';
+import { ForceUpdateProvider, useForceUpdate } from '@/contexts/ForceUpdateContext';
 import { trpc, trpcClient } from '@/lib/trpc';
 import { supabase } from '@/lib/supabase';
 import CustomSplashScreen from '@/components/SplashScreen';
+import ForceUpdateScreen from '@/components/ForceUpdateScreen';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -242,6 +244,30 @@ export default function RootLayout() {
 
   if (showSplash) {
     return <CustomSplashScreen onFinish={handleSplashFinish} />;
+  }
+
+  return (
+    <ForceUpdateProvider>
+      <AppContent />
+    </ForceUpdateProvider>
+  );
+}
+
+function AppContent() {
+  const { isUpdateRequired, isChecking } = useForceUpdate();
+
+  // While checking version, show splash-style loading
+  if (isChecking) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center' }}>
+        <Text style={{ fontSize: 16, color: '#666666' }}>Checking for updates...</Text>
+      </View>
+    );
+  }
+
+  // Block access if update is required
+  if (isUpdateRequired) {
+    return <ForceUpdateScreen />;
   }
 
   return (

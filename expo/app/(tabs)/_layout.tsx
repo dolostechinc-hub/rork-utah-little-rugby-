@@ -1,13 +1,17 @@
 import { Tabs } from 'expo-router';
 import { ClipboardCheck, Users, Settings, UserPlus } from 'lucide-react-native';
 import React from 'react';
+import { View } from 'react-native';
 import Colors from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
+import CloudStaleBanner from '@/components/CloudStaleBanner';
 
 export default function TabLayout() {
   const { canEdit } = useAuth();
 
   return (
+    <View style={{ flex: 1 }}>
+    <CloudStaleBanner />
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: Colors.light.tint,
@@ -54,5 +58,6 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </View>
   );
 }

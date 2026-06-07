@@ -106,12 +106,6 @@ function mergePlayerRecords(a: Player, b: Player): Player {
   if (!a) return b;
   if (!b) return a;
 
-  const pick = <T,>(av: T, bv: T, isEmpty: (v: T) => boolean): T => {
-    if (!isEmpty(av)) return av;
-    return bv;
-  };
-  const isEmptyStr = (v: string | null | undefined) => !v || !String(v).trim();
-
   // ── Row-level client timestamps for last-write-wins decisions ──────
   const aTs = a.clientUpdatedAt ? Date.parse(a.clientUpdatedAt) : 0;
   const bTs = b.clientUpdatedAt ? Date.parse(b.clientUpdatedAt) : 0;
@@ -195,25 +189,55 @@ function mergePlayerRecords(a: Player, b: Player): Player {
   const mergedClientUpdatedAt: string | undefined =
     aTs >= bTs ? a.clientUpdatedAt : b.clientUpdatedAt;
 
+  // ── Last-write-wins field picker ───────────────────────────────────
+  // Uses clientUpdatedAt to decide which value wins. When timestamps are
+  // missing or equal, falls back to the richer (non-empty) value. This
+  // replaces the old "local always wins" pick() which silently discarded
+  // every update made by another volunteer.
+  const pickTs = (af: string, bf: string): string => {
+    const aEmpty = !af.trim();
+    const bEmpty = !bf.trim();
+    if (aEmpty && bEmpty) return '';
+    if (aEmpty) return bf;
+    if (bEmpty) return af;
+    if (aTs > 0 && bTs > 0) return aTs >= bTs ? af : bf;
+    if (aTs > 0) return af;
+    if (bTs > 0) return bf;
+    return af;
+  };
+
   return {
     ...a,
-    firstName: pick(a.firstName, b.firstName, isEmptyStr),
-    lastName: pick(a.lastName, b.lastName, isEmptyStr),
-    club: pick(a.club, b.club, isEmptyStr),
-    ageGroup: pick(a.ageGroup, b.ageGroup, isEmptyStr),
-    division: pick(a.division, b.division, isEmptyStr),
-    teamName: pick(a.teamName, b.teamName, isEmptyStr),
-    dateOfBirth: pick(a.dateOfBirth, b.dateOfBirth, isEmptyStr),
-    parentName: pick(a.parentName, b.parentName, isEmptyStr),
-    parentPhone: pick(a.parentPhone, b.parentPhone, isEmptyStr),
-    isAgeVerified: !!a.isAgeVerified || !!b.isAgeVerified,
+    firstName: pickTs(a.firstName ?? '', b.firstName ?? ''),
+    lastName: pickTs(a.lastName ?? '', b.lastName ?? ''),
+    club: pickTs(a.club ?? '', b.club ?? ''),
+    ageGroup: pickTs(a.ageGroup ?? '', b.ageGroup ?? ''),
+    division: pickTs(a.division ?? '', b.division ?? ''),
+    teamName: pickTs(a.teamName ?? '', b.teamName ?? ''),
+    dateOfBirth: pickTs(a.dateOfBirth ?? '', b.dateOfBirth ?? ''),
+    parentName: pickTs(a.parentName ?? '', b.parentName ?? ''),
+    parentPhone: pickTs(a.parentPhone ?? '', b.parentPhone ?? ''),
+    isAgeVerified: aTs > 0 && bTs > 0
+      ? (aTs >= bTs ? !!a.isAgeVerified : !!b.isAgeVerified)
+      : (!!a.isAgeVerified || !!b.isAgeVerified),
     photoUri,
     weight,
     checkedIn,
     checkedInAt,
-    restrictionStatus: a.restrictionStatus ?? b.restrictionStatus ?? 'none',
-    playsUp: a.playsUp ?? b.playsUp ?? false,
-    calculatedAgeGroup: a.calculatedAgeGroup || b.calculatedAgeGroup,
+    restrictionStatus: (() => {
+      const def = 'none';
+      if (aTs > 0 && bTs > 0) return (aTs >= bTs ? a.restrictionStatus : b.restrictionStatus) ?? def;
+      if (aTs > 0) return a.restrictionStatus ?? def;
+      if (bTs > 0) return b.restrictionStatus ?? def;
+      return a.restrictionStatus ?? b.restrictionStatus ?? def;
+    })() as Player['restrictionStatus'],
+    playsUp: (() => {
+      if (aTs > 0 && bTs > 0) return aTs >= bTs ? (a.playsUp ?? false) : (b.playsUp ?? false);
+      if (aTs > 0) return a.playsUp ?? false;
+      if (bTs > 0) return b.playsUp ?? false;
+      return a.playsUp ?? b.playsUp ?? false;
+    })(),
+    calculatedAgeGroup: pickTs(a.calculatedAgeGroup ?? '', b.calculatedAgeGroup ?? '') || undefined,
     clientUpdatedAt: mergedClientUpdatedAt,
   };
 }
@@ -825,9 +849,14 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
         // next tick.
         const flush = flushCloudQueueRef.current;
         if (flush) void flush();
+        setCloudRefreshError(null);
+        setCloudRefreshFailedAt(null);
         return 'ok';
       } catch (err) {
-        console.warn('[rosterSync] refreshRosterFromCloud failed (using local cache):', err);
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn('[rosterSync] refreshRosterFromCloud failed (using local cache):', message);
+        setCloudRefreshError(message);
+        setCloudRefreshFailedAt(new Date().toISOString());
         return 'error';
       }
     },
@@ -858,11 +887,16 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     };
   }, [currentOrg?.id, applyRosterChangeLocally, refreshRosterFromCloud]);
 
-  // ── AppState foreground refresh ─────────────────────────────────
+  // ── AppState foreground refresh + periodic background revalidation ──
   // When the app returns from the background, re-fetch the roster from
   // Supabase so stale AsyncStorage data is always replaced with the
   // latest cloud data without requiring a force-close or reinstall.
+  //
+  // Additionally, we run a periodic refresh every 5 minutes while the app
+  // is in the foreground. This catches updates from other volunteers
+  // without requiring the user to background/foreground the app.
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const periodicTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     const handleChange = (nextState: AppStateStatus) => {
       if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
@@ -874,7 +908,32 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
       appStateRef.current = nextState;
     };
     const subscription = AppState.addEventListener('change', handleChange);
-    return () => subscription.remove();
+
+    // Start periodic refresh (every 5 minutes)
+    const FIVE_MINUTES = 5 * 60 * 1000;
+    periodicTimerRef.current = setInterval(() => {
+      if (AppState.currentState === 'active' && currentOrg?.id) {
+        console.log('[rosterSync] periodic cloud refresh');
+        refreshRosterFromCloud().catch((err) => {
+          console.warn('[rosterSync] periodic refresh failed:', err);
+        });
+      }
+    }, FIVE_MINUTES);
+
+    return () => {
+      subscription.remove();
+      if (periodicTimerRef.current != null) {
+        clearInterval(periodicTimerRef.current);
+        periodicTimerRef.current = null;
+      }
+    };
+  }, [refreshRosterFromCloud, currentOrg?.id]);
+
+  // ── retryCloudRefresh — callable from UI ──────────────────────────
+  const retryCloudRefresh = useCallback(async () => {
+    setCloudRefreshError(null);
+    setCloudRefreshFailedAt(null);
+    return refreshRosterFromCloud();
   }, [refreshRosterFromCloud]);
 
   // ── Coach fetch + realtime subscription ──────────────────────────
@@ -1303,6 +1362,10 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
   const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(false);
   const [lastCloudSyncedAt, setLastCloudSyncedAt] = useState<string | null>(null);
   const [lastCloudSyncResult, setLastCloudSyncResult] = useState<FlushResult | null>(null);
+  // Cloud roster refresh error tracking — surfaced so the UI can show a
+  // "Data may be stale" banner with a retry button.
+  const [cloudRefreshError, setCloudRefreshError] = useState<string | null>(null);
+  const [cloudRefreshFailedAt, setCloudRefreshFailedAt] = useState<string | null>(null);
   // Tracks the device's network connectivity. Defaults to `true` so the app
   // doesn't render "Offline" badges on cold start before NetInfo has fired
   // its first event. Updated by the NetInfo listener registered below.
@@ -3009,6 +3072,9 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     flushCloudQueueNow,
     forceSyncAllToCloud,
     refreshRosterFromCloud,
+    retryCloudRefresh,
+    cloudRefreshError,
+    cloudRefreshFailedAt,
     enqueuePhotoUpload,
     flushPhotoQueueNow,
     photoUploadPendingCount: photoUploadQueue.length,
@@ -3036,7 +3102,8 @@ export const [RegistrationProvider, useRegistration] = createContextHook(() => {
     showTeamAssignment, setShowTeamAssignment,
     isPreviouslyAgeVerified, verifiedRegistry,
     cloudQueue, isCloudSyncing, isOnline, lastCloudSyncedAt, lastCloudSyncResult,
-    flushCloudQueueNow, forceSyncAllToCloud, refreshRosterFromCloud,
+    flushCloudQueueNow, forceSyncAllToCloud, refreshRosterFromCloud, retryCloudRefresh,
+    cloudRefreshError, cloudRefreshFailedAt,
     enqueuePhotoUpload, flushPhotoQueueNow, photoUploadQueue.length,
     coaches, coachTeams, refreshCoaches, updateCoach, addCoach, deleteCoach, setCoachTeamAssignments, importCoaches,
   ]);
